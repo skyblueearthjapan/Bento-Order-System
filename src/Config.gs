@@ -96,8 +96,8 @@ var RULES = {
   MONTH_START_DAY: 16            // 月度開始日: 16日
 };
 
-// ===== ポータルURL（デプロイ後に差し替え） =====
-var PORTAL_URL = 'https://script.google.com/a/macros/lineworks-local.info/s/__REPLACE_ME__/exec';
+// ===== ポータルURL（社内ポータルGAS Webアプリ） =====
+var PORTAL_URL = 'https://script.google.com/a/macros/lineworks-local.info/s/AKfycbx2eyJMOYP9o--GPBuhY-pj071IIR6Kqb_0xALwwNzdLQZux0dIAlL3P9EoCucnzXA/exec';
 
 // ===== アプリ情報 =====
 var APP_TITLE = 'お弁当予約';
