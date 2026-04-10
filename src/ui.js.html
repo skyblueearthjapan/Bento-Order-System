@@ -720,8 +720,17 @@
     document.getElementById('calendarModal').classList.remove('active');
     state.locationMode = false;
     state.hadAnyChangeThisSession = false;
+    state.currentUser = null;
     document.getElementById('calBentoBox').classList.remove('location-mode');
     document.getElementById('locationBtn').classList.remove('active');
+
+    // プルダウンと検索窓をリセット（同じ名前を再選択できるように）
+    var deptSel = document.getElementById('dept-select');
+    var nameSel = document.getElementById('name-select');
+    var nameSearch = document.getElementById('name-search');
+    if (deptSel) deptSel.value = '';
+    if (nameSel) nameSel.innerHTML = '<option value="">-- 名前を選択 --</option>';
+    if (nameSearch) nameSearch.value = '';
 
     if (hadChanges) {
       var toast = document.getElementById('toast');
