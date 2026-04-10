@@ -434,22 +434,19 @@
     var today = state.today;
     var y = today.getFullYear();
     var m = today.getMonth();  // 0-11
-    var day = today.getDate();
-    var monthStart, monthEnd;
-    if (day >= MONTH_START_DAY) {
-      monthStart = new Date(y, m, 16);
-      monthEnd = new Date(y, m + 1, 15);
-    } else {
-      monthStart = new Date(y, m - 1, 16);
-      monthEnd = new Date(y, m, 15);
-    }
+
+    // 現在の月（上）と次の月（下）の2ヶ月分を表示
+    var monthStart = new Date(y, m, 1);                // 今月1日
+    var monthEnd = new Date(y, m + 2, 0);              // 翌月末日
 
     // タイトル
-    var mEndY = monthEnd.getFullYear();
-    var mEndM = monthEnd.getMonth() + 1;
-    var mStartM = monthStart.getMonth() + 1;
+    var curM = monthStart.getMonth() + 1;
+    var curY = monthStart.getFullYear();
+    var nextDate = new Date(y, m + 1, 1);
+    var nextM = nextDate.getMonth() + 1;
+    var nextY = nextDate.getFullYear();
     document.getElementById('calTitle').textContent =
-      mEndY + '年' + ('0' + mEndM).slice(-2) + '月度（' + mStartM + '/16〜' + mEndM + '/15）';
+      curY + '年' + curM + '月・' + (nextY !== curY ? nextY + '年' : '') + nextM + '月';
 
     // グリッド生成
     var grid = document.getElementById('calGrid');
@@ -629,12 +626,11 @@
     SaveManager.scheduleSave();
     state.hadAnyChangeThisSession = true;
 
-    // 集計再描画
+    // 集計再描画（現在月+次月の2ヶ月分）
     var today = state.today;
-    var y = today.getFullYear(), mo = today.getMonth(), da = today.getDate();
-    var ms, me;
-    if (da >= MONTH_START_DAY) { ms = new Date(y, mo, 16); me = new Date(y, mo + 1, 15); }
-    else { ms = new Date(y, mo - 1, 16); me = new Date(y, mo, 15); }
+    var y = today.getFullYear(), mo = today.getMonth();
+    var ms = new Date(y, mo, 1);
+    var me = new Date(y, mo + 2, 0);
     renderSummary(ms, me);
   }
 
@@ -713,10 +709,12 @@
     }
 
     var total = bentoTotal + okazuTotal;
-    var monthKey = (monthEnd.getMonth() + 1) + '月度';
+    var startM = monthStart.getMonth() + 1;
+    var endM = monthEnd.getMonth() + 1;
+    var label = startM + '月・' + endM + '月';
 
     var html = '';
-    html += '<div class="cal-summary-item"><span class="label" style="font-weight:700; font-size:15px;">' + monthKey + '</span></div>';
+    html += '<div class="cal-summary-item"><span class="label" style="font-weight:700; font-size:15px;">' + label + '</span></div>';
     html += '<div class="cal-summary-item"><span class="label">🍱 弁当:</span><span class="count">' + bentoTotal + '</span>個';
     html += '<span class="sub">（実績' + bentoDone + ' + 予定' + bentoPlan + '）</span></div>';
     html += '<div class="cal-summary-item"><span class="label">🥢 おかずのみ:</span><span class="count">' + okazuTotal + '</span>個';
