@@ -5,11 +5,10 @@
 
 // ===== スプレッドシートID =====
 // アプリ本体のスプレッドシート（予約データ + 管理シート + マスタキャッシュ）
-// GAS拡張として紐づくスプレッドシート
-var SOURCE_SPREADSHEET_ID = '1iu5HoaknlW1W1HheeYv0jqcRq-aY0SyEE2seQd2pHkQ';
+// firstTimeSetup() 実行時に全シートが自動生成される
+var SOURCE_SPREADSHEET_ID = '1L5JhsWYcmGMs3-tTw1Y-TC_yn1CNybw4SKgg_HaB2ow';
 
-// 外部マスタシート所在スプレッドシート（作業員マスタ・社内カレンダーマスタのソース）
-// 現状は同一スプレッドシート内だが、将来別SSに分離する場合のため定数分離
+// 外部マスタシート所在スプレッドシート（作業員マスタ・社内カレンダーマスタのソース、読み取り専用）
 var EXTERNAL_MASTER_SPREADSHEET_ID = '1iu5HoaknlW1W1HheeYv0jqcRq-aY0SyEE2seQd2pHkQ';
 
 // 総務管理用スプレッドシート保存先フォルダ
