@@ -31,13 +31,15 @@ var SHEET_CONFIG = 'app_config';               // アプリ設定
 var RESERVATION_COL = {
   WORKER_CODE: 1,    // A: 作業員コード
   WORKER_NAME: 2,    // B: 氏名
-  DATE: 3,           // C: 日付 (YYYY-MM-DD)
-  ORDER_STATE: 4,    // D: 注文状態 ('', 'bento', 'okazu')
-  LOCATION: 5,       // E: 配達拠点 ('新工場' | '本社工場')
-  UPDATED_AT: 6,     // F: 最終更新日時
-  UPDATED_BY: 7      // G: 更新者（Session.getActiveUser().getEmail()）
+  DEPT: 3,           // C: 部署
+  STAFF_TYPE: 4,     // D: スタッフ種類 (事務所/工場)
+  DATE: 5,           // E: 日付 (YYYY-MM-DD)
+  ORDER_STATE: 6,    // F: 注文状態 ('', 'bento', 'okazu')
+  LOCATION: 7,       // G: 配達拠点 ('新工場' | '本社工場')
+  UPDATED_AT: 8,     // H: 最終更新日時
+  UPDATED_BY: 9      // I: 更新者（Session.getActiveUser().getEmail()）
 };
-var RESERVATION_HEADERS = ['作業員コード', '氏名', '日付', '注文状態', '配達拠点', '更新日時', '更新者'];
+var RESERVATION_HEADERS = ['作業員コード', '氏名', '部署', 'スタッフ種類', '日付', '注文状態', '配達拠点', '更新日時', '更新者'];
 
 // ===== 作業員マスタ 列構成 =====
 var WORKER_COL = {

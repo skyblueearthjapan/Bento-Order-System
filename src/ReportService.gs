@@ -138,12 +138,12 @@ var ReportService = (function() {
         sheet.clear();
       }
 
-      // ヘッダー: A=氏名, B〜=日付
-      var header = ['氏名'].concat(dates);
+      // ヘッダー: A=氏名, B=部署, C〜=日付
+      var header = ['氏名', '部署'].concat(dates);
       sheet.getRange(1, 1, 1, header.length).setValues([header]);
       sheet.getRange(1, 1, 1, header.length).setFontWeight('bold').setBackground('#f0e8d8');
       sheet.setFrozenRows(1);
-      sheet.setFrozenColumns(1);
+      sheet.setFrozenColumns(2);
 
       // 該当グループの作業員（日別拠点解決後の配属先で判定）
       // 各日について、その日の配達拠点がこのグループに該当する作業員を含める
@@ -154,7 +154,7 @@ var ReportService = (function() {
       });
 
       groupWorkers.forEach(function(w) {
-        var row = [w.name];
+        var row = [w.name, w.dept];
         dates.forEach(function(d) {
           var loc = resolveLocationForDate(w.code, d, reservationsMap, workersMap);
           var g = _getGroupKey(loc, w.staffType);
@@ -177,7 +177,7 @@ var ReportService = (function() {
         if (groupWorkers.indexOf(w) >= 0) return;  // 既に処理済み
         // この作業員がこの月度のいずれかの日でこのグループに属していればリストに追加
         var hasAny = false;
-        var row = [w.name + '※'];  // 一時配属を示す印
+        var row = [w.name + '※', w.dept];  // 一時配属を示す印
         dates.forEach(function(d) {
           var loc = resolveLocationForDate(w.code, d, reservationsMap, workersMap);
           var g = _getGroupKey(loc, w.staffType);
@@ -192,8 +192,9 @@ var ReportService = (function() {
       });
 
       // 空行スキップ: データのない行は除外してから1回だけ書き込み
+      // rowsは[氏名, 部署, d0, d1, ...]なので、データ判定はインデックス2以降
       var displayRows = rows.filter(function(r) {
-        for (var c = 1; c < r.length; c++) { if (r[c]) return true; }
+        for (var c = 2; c < r.length; c++) { if (r[c]) return true; }
         return false;
       });
       if (displayRows.length > 0) {
@@ -203,20 +204,20 @@ var ReportService = (function() {
       // 集計行: 弁当 / おかずのみ / 合計
       var summaryStartRow = 2 + displayRows.length + 1;
       var summaryRows = [
-        ['弁当'].concat(dates.map(function(d, i) {
-          var col = i + 1;  // rowsは[氏名, d0, d1, ...]なのでd_iはr[i+1]
+        ['弁当', ''].concat(dates.map(function(d, i) {
+          var col = i + 2;  // rowsは[氏名, 部署, d0, d1, ...]なのでd_iはr[i+2]
           var count = 0;
           displayRows.forEach(function(r) { if (r[col] === '○') count++; });
           return count;
         })),
-        ['おかずのみ'].concat(dates.map(function(d, i) {
-          var col = i + 1;
+        ['おかずのみ', ''].concat(dates.map(function(d, i) {
+          var col = i + 2;
           var count = 0;
           displayRows.forEach(function(r) { if (r[col] === 'お') count++; });
           return count;
         })),
-        ['合計'].concat(dates.map(function(d, i) {
-          var col = i + 1;
+        ['合計', ''].concat(dates.map(function(d, i) {
+          var col = i + 2;
           var count = 0;
           displayRows.forEach(function(r) { if (r[col] === '○' || r[col] === 'お') count++; });
           return count;

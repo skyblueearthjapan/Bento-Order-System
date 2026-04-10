@@ -99,17 +99,19 @@ var SheetService = (function() {
     var sheet = getOrCreateSheet(SHEET_RESERVATIONS, RESERVATION_HEADERS);
     var lastRow = sheet.getLastRow();
     if (lastRow < 2) return { sheet: sheet, rows: [] };
-    var values = sheet.getRange(2, 1, lastRow - 1, 7).getValues();
+    var values = sheet.getRange(2, 1, lastRow - 1, 9).getValues();
     var rows = values.map(function(r, i) {
       return {
         _row: i + 2,
         workerCode: String(r[0] || '').trim(),
         workerName: String(r[1] || '').trim(),
-        date: r[2] instanceof Date ? formatDateYmd(r[2]) : String(r[2] || '').trim(),
-        orderState: String(r[3] || '').trim(),
-        location: String(r[4] || '').trim(),
-        updatedAt: r[5] instanceof Date ? formatDateTime(r[5]) : String(r[5] || ''),
-        updatedBy: String(r[6] || '').trim()
+        dept: String(r[2] || '').trim(),
+        staffType: String(r[3] || '').trim(),
+        date: r[4] instanceof Date ? formatDateYmd(r[4]) : String(r[4] || '').trim(),
+        orderState: String(r[5] || '').trim(),
+        location: String(r[6] || '').trim(),
+        updatedAt: r[7] instanceof Date ? formatDateTime(r[7]) : String(r[7] || ''),
+        updatedBy: String(r[8] || '').trim()
       };
     }).filter(function(r) { return r.workerCode && r.date; });
     return { sheet: sheet, rows: rows };
@@ -123,6 +125,8 @@ var SheetService = (function() {
       return {
         workerCode: r.workerCode,
         workerName: r.workerName,
+        dept: r.dept,
+        staffType: r.staffType,
         date: r.date,
         orderState: r.orderState,
         location: r.location,
@@ -159,8 +163,13 @@ var SheetService = (function() {
       if (existingRow) {
         sheet.deleteRow(existingRow._row);
       }
-      return null;  // キャンセルはnullを返しクライアント側でstateから削除
+      return null;
     }
+
+    // 作業員マスタから部署・スタッフ種類を取得（キャッシュとして保存）
+    var worker = getWorkerByCode(change.workerCode);
+    var dept = worker ? worker.dept : '';
+    var staffType = worker ? worker.staffType : '';
 
     if (existingRow) {
       // 更新
@@ -172,28 +181,34 @@ var SheetService = (function() {
       if (change.workerName) {
         sheet.getRange(row, RESERVATION_COL.WORKER_NAME).setValue(change.workerName);
       }
+      // 部署・スタッフ種類も最新に更新
+      sheet.getRange(row, RESERVATION_COL.DEPT).setValue(dept);
+      sheet.getRange(row, RESERVATION_COL.STAFF_TYPE).setValue(staffType);
     } else {
       // 新規追加
-      var dateCell = change.date;
       var newRow = [
         change.workerCode,
         change.workerName || '',
-        dateCell,
+        dept,
+        staffType,
+        change.date,
         change.orderState,
         change.location || '',
         now,
         email
       ];
       sheet.appendRow(newRow);
-      // 日付セルを文字列フォーマット固定
       var appendedRowNum = sheet.getLastRow();
+      // 日付セルを文字列フォーマット固定
       sheet.getRange(appendedRowNum, RESERVATION_COL.DATE).setNumberFormat('@');
-      sheet.getRange(appendedRowNum, RESERVATION_COL.DATE).setValue(dateCell);
+      sheet.getRange(appendedRowNum, RESERVATION_COL.DATE).setValue(change.date);
     }
 
     return {
       workerCode: change.workerCode,
       workerName: change.workerName || '',
+      dept: dept,
+      staffType: staffType,
       date: change.date,
       orderState: change.orderState,
       location: change.location || '',
