@@ -587,20 +587,19 @@
     }
   }
 
-  // ===== セルクリック（3状態トグル or 拠点切替） =====
+  // ===== セルクリック（3状態トグル、拠点は現在のモードで決定） =====
   function onCellClick(dateStr, cell) {
     if (!state.currentUser) return;
 
-    if (state.locationMode) {
-      toggleLocation(dateStr, cell);
-      return;
-    }
+    // 拠点決定: 通常モード→デフォルト拠点、拠点変更モード→逆の拠点
+    var defaultLoc = state.currentUser.location;
+    var oppositeLoc = defaultLoc === '新工場' ? '本社工場' : '新工場';
+    var location = state.locationMode ? oppositeLoc : defaultLoc;
 
-    // 注文状態トグル
+    // 注文状態トグル: '' → 'bento' → 'okazu' → ''
     var rez = state.reservations[state.currentUser.code + '_' + dateStr];
     var cur = rez ? rez.orderState : '';
     var next = cur === '' ? 'bento' : cur === 'bento' ? 'okazu' : '';
-    var location = (rez && rez.location) || state.currentUser.location;
 
     var updated = {
       workerCode: state.currentUser.code,
@@ -632,26 +631,6 @@
     var ms = new Date(y, mo, 1);
     var me = new Date(y, mo + 2, 0);
     renderSummary(ms, me);
-  }
-
-  function toggleLocation(dateStr, cell) {
-    if (!state.currentUser) return;
-    var rez = state.reservations[state.currentUser.code + '_' + dateStr];
-    if (!rez || !rez.orderState) return;  // 注文なしの日は拠点変更不可
-    var next = rez.location === '新工場' ? '本社工場' : '新工場';
-    var updated = Object.assign({}, rez, { location: next });
-    state.reservations[state.currentUser.code + '_' + dateStr] = updated;
-    applyCellDisplay(cell, rez.orderState, next);
-
-    ChangeQueue.add({
-      workerCode: state.currentUser.code,
-      workerName: state.currentUser.name,
-      date: dateStr,
-      orderState: rez.orderState,
-      location: next
-    });
-    DraftStore.save(state.currentUser.code, [{ date: dateStr, orderState: rez.orderState, location: next }]);
-    SaveManager.scheduleSave();
   }
 
   // ===== 締切判定 =====
