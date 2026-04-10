@@ -172,14 +172,42 @@
 
   .cal-cell.work-sat { background: #f8f4ff; border-color: #b0a0d0; }
 
-  .cal-cell.holiday { background: #f0ece5; border-color: #e0d8cc; cursor: default; opacity: 0.6; }
-  .cal-cell.holiday .holiday-label { font-size: 9px; color: #a09080; margin-top: 2px; }
+  .cal-cell.holiday { background: #e8e4dc; border-color: #c8c0b0; cursor: default; filter: grayscale(0.6); opacity: 0.55; }
+  .cal-cell.holiday .holiday-label { font-size: 9px; color: #8a7a60; margin-top: 2px; }
 
-  .cal-cell.disabled { cursor: default; opacity: 0.5; }
-  .cal-cell.disabled::after { content: '🔒'; position: absolute; bottom: 2px; left: 4px; font-size: 8px; }
+  /* 過去・締切済み（編集不可・濃いグレー） */
+  .cal-cell.disabled {
+    cursor: default;
+    background: #d8d2c5 !important;
+    border-color: #b8b0a0 !important;
+    filter: grayscale(0.8);
+    opacity: 0.55;
+  }
+  .cal-cell.disabled .order-icon,
+  .cal-cell.disabled .order-label { color: #7a7060 !important; }
+  .cal-cell.disabled::after { content: '🔒'; position: absolute; bottom: 2px; left: 4px; font-size: 9px; opacity: 0.8; }
 
-  .cal-cell.future-locked { cursor: default; opacity: 0.4; }
-  .cal-cell.future-locked::after { content: '🕐'; position: absolute; bottom: 2px; left: 4px; font-size: 8px; }
+  /* 予約可能期間外（2週間超・薄いグレー斜線風） */
+  .cal-cell.future-locked {
+    cursor: default;
+    background: repeating-linear-gradient(45deg, #ebe5d8, #ebe5d8 4px, #e0d8c8 4px, #e0d8c8 8px) !important;
+    border-color: #c8c0b0 !important;
+    opacity: 0.6;
+  }
+  .cal-cell.future-locked .order-icon,
+  .cal-cell.future-locked .order-label { color: #a09080 !important; }
+  .cal-cell.future-locked::after { content: '🕐'; position: absolute; bottom: 2px; left: 4px; font-size: 9px; opacity: 0.8; }
+
+  /* 編集可能セル(empty)を明るく */
+  .cal-cell.empty:not(.disabled):not(.future-locked):not(.holiday) {
+    background: #ffffff;
+    border-color: #d4c4a0;
+    box-shadow: 0 1px 3px rgba(200, 160, 80, 0.1);
+  }
+  .cal-cell.empty:not(.disabled):not(.future-locked):not(.holiday):hover {
+    background: #fff8e8;
+    border-color: #e8a830;
+  }
 
   /* 拠点バッジ */
   .location-badge { position: absolute; bottom: 3px; right: 4px; font-size: 10px; padding: 1px 4px; border-radius: 3px; font-weight: 500; }
