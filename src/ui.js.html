@@ -1,0 +1,773 @@
+<script>
+(function() {
+  'use strict';
+
+  // ===== 定数 =====
+  var STORAGE_PREFIX = 'bento_draft_v1_';
+  var AUTO_SAVE_DELAY = 3000;
+  var PERIODIC_SAVE_INTERVAL = 30000;
+  var RESERVATION_WINDOW_DAYS = 14;
+  var DEADLINE_HOUR = 9;
+  var SAT_DEADLINE_HOUR = 15;
+  var MONTH_START_DAY = 16;
+
+  var WEEKDAY_JP = ['日', '月', '火', '水', '木', '金', '土'];
+
+  // ===== グローバル状態 =====
+  var state = {
+    workers: [],
+    calendar: [],
+    calendarMap: {},  // date → entry
+    reservations: {},  // key "code_date" → reservation
+    currentUser: null,
+    locationMode: false,
+    saveStatus: 'saved',
+    today: null,  // Date
+    todayStr: ''
+  };
+
+  // ===== GasPromise: google.script.run の Promise 化 =====
+  var GasPromise = {
+    call: function(fnName) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      return new Promise(function(resolve, reject) {
+        var runner = google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(function(err) {
+            reject(err instanceof Error ? err : new Error(err && err.message ? err.message : String(err)));
+          });
+        runner[fnName].apply(runner, args);
+      });
+    }
+  };
+
+  // ===== A層: DraftStore =====
+  var DraftStore = (function() {
+    var availability = null;
+
+    function detect() {
+      if (availability !== null) return availability;
+      try {
+        localStorage.setItem('__bento_test__', '1');
+        localStorage.removeItem('__bento_test__');
+        availability = 'local';
+      } catch (e) {
+        try {
+          sessionStorage.setItem('__bento_test__', '1');
+          sessionStorage.removeItem('__bento_test__');
+          availability = 'session';
+        } catch (e2) {
+          availability = 'none';
+        }
+      }
+      return availability;
+    }
+
+    function store() {
+      var a = detect();
+      if (a === 'local') return localStorage;
+      if (a === 'session') return sessionStorage;
+      return null;
+    }
+
+    function key(workerCode) { return STORAGE_PREFIX + workerCode; }
+
+    function save(workerCode, changes) {
+      var s = store();
+      if (!s) return;
+      try {
+        var existing = load(workerCode) || {};
+        changes.forEach(function(c) {
+          existing[c.date] = { orderState: c.orderState, location: c.location, _ts: Date.now() };
+        });
+        s.setItem(key(workerCode), JSON.stringify(existing));
+      } catch (e) { console.warn('Draft save failed', e); }
+    }
+
+    function load(workerCode) {
+      var s = store();
+      if (!s) return null;
+      try {
+        var v = s.getItem(key(workerCode));
+        return v ? JSON.parse(v) : null;
+      } catch (e) { return null; }
+    }
+
+    function clearDates(workerCode, dates) {
+      var s = store();
+      if (!s) return;
+      try {
+        var existing = load(workerCode) || {};
+        dates.forEach(function(d) { delete existing[d]; });
+        if (Object.keys(existing).length === 0) s.removeItem(key(workerCode));
+        else s.setItem(key(workerCode), JSON.stringify(existing));
+      } catch (e) {}
+    }
+
+    return { save: save, load: load, clearDates: clearDates, detect: detect };
+  })();
+
+  // ===== C層: ChangeQueue =====
+  var ChangeQueue = (function() {
+    var queue = {};
+    var pendingTimer = null;
+    var seq = 0;
+
+    function keyOf(c) { return c.workerCode + '_' + c.date; }
+
+    return {
+      add: function(change) {
+        queue[keyOf(change)] = Object.assign({}, change, { _seq: ++seq });
+      },
+      hasChanges: function() { return Object.keys(queue).length > 0; },
+      getAll: function() {
+        return Object.keys(queue).map(function(k) { return queue[k]; })
+          .sort(function(a, b) { return a._seq - b._seq; });
+      },
+      clearSaved: function(saved) {
+        saved.forEach(function(s) { delete queue[s.workerCode + '_' + s.date]; });
+      },
+      clearAll: function() { queue = {}; },
+      setTimer: function(t) { pendingTimer = t; },
+      clearTimer: function() { if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; } }
+    };
+  })();
+
+  // ===== B層: SaveManager =====
+  var SaveManager = {
+    isSaving: false,
+    periodicTimer: null,
+
+    scheduleSave: function() {
+      ChangeQueue.clearTimer();
+      updateSaveStatus('unsaved');
+      ChangeQueue.setTimer(setTimeout(flushChanges, AUTO_SAVE_DELAY));
+    },
+
+    startPeriodic: function() {
+      if (this.periodicTimer) clearInterval(this.periodicTimer);
+      this.periodicTimer = setInterval(function() {
+        if (ChangeQueue.hasChanges() && !SaveManager.isSaving) flushChanges();
+      }, PERIODIC_SAVE_INTERVAL);
+    }
+  };
+
+  // ===== 保存状態表示 =====
+  function updateSaveStatus(status) {
+    state.saveStatus = status;
+    var dot = document.getElementById('saveDot');
+    var label = document.getElementById('saveLabel');
+    if (!dot || !label) return;
+    var map = {
+      saved:    ['保存済み',   ''],
+      saving:   ['保存中...',  'saving'],
+      unsaved:  ['未保存',     'unsaved'],
+      error:    ['保存失敗',   'error'],
+      offline:  ['オフライン', 'offline']
+    };
+    var info = map[status] || map.saved;
+    label.textContent = info[0];
+    dot.className = 'cal-save-dot ' + info[1];
+  }
+
+  // ===== 保存実行 =====
+  function flushChanges() {
+    if (!ChangeQueue.hasChanges() || SaveManager.isSaving) return Promise.resolve();
+    if (!navigator.onLine) { updateSaveStatus('offline'); return Promise.resolve(); }
+
+    SaveManager.isSaving = true;
+    updateSaveStatus('saving');
+
+    var changes = ChangeQueue.getAll().map(function(c) {
+      return {
+        workerCode: c.workerCode,
+        workerName: c.workerName,
+        date: c.date,
+        orderState: c.orderState,
+        location: c.location
+      };
+    });
+
+    return GasPromise.call('api_applyPatch', changes).then(function(results) {
+      var ok = (results || []).filter(function(r) { return r.success; });
+      var ng = (results || []).filter(function(r) { return !r.success; });
+      ChangeQueue.clearSaved(ok);
+      if (state.currentUser && ok.length > 0) {
+        DraftStore.clearDates(state.currentUser.code, ok.map(function(r) { return r.date; }));
+      }
+      // 成功した変更はstateにも反映（キャンセル時はrow===nullなのでstateから削除）
+      ok.forEach(function(r) {
+        var key = r.workerCode + '_' + r.date;
+        if (r.row) {
+          state.reservations[key] = r.row;
+        } else {
+          delete state.reservations[key];
+        }
+      });
+      if (ng.length > 0) {
+        console.error('Partial save failure:', ng);
+        updateSaveStatus('error');
+      } else {
+        updateSaveStatus('saved');
+      }
+    }).catch(function(err) {
+      console.error('Save failed:', err);
+      updateSaveStatus('error');
+    }).then(function() {
+      SaveManager.isSaving = false;
+    });
+  }
+
+  // ===== オフライン/オンライン検知 =====
+  window.addEventListener('online', function() {
+    if (ChangeQueue.hasChanges()) { updateSaveStatus('unsaved'); SaveManager.scheduleSave(); }
+    else updateSaveStatus('saved');
+  });
+  window.addEventListener('offline', function() { updateSaveStatus('offline'); });
+  window.addEventListener('beforeunload', function(e) {
+    if (ChangeQueue.hasChanges()) {
+      flushChanges();
+      e.preventDefault();
+      e.returnValue = '保存されていない変更があります';
+    }
+  });
+
+  // ===== 初期化 =====
+  function init() {
+    state.todayStr = INIT_TODAY;
+    state.today = new Date(INIT_TODAY + 'T00:00:00+09:00');
+
+    // 読み込み表示
+    var n = document.getElementById('noticeArea');
+    if (n) n.textContent = '読み込み中...';
+
+    GasPromise.call('api_bootstrap').then(function(data) {
+      state.workers = data.workers || [];
+      state.calendar = data.calendar || [];
+      state.calendarMap = {};
+      state.calendar.forEach(function(c) { state.calendarMap[c.date] = c; });
+      state.reservations = {};
+      (data.reservations || []).forEach(function(r) {
+        state.reservations[r.workerCode + '_' + r.date] = r;
+      });
+
+      renderNotice(data.notice, data.warning);
+      renderDeptDropdown();
+      setupSearch();
+      setupButtons();
+      SaveManager.startPeriodic();
+    }).catch(function(err) {
+      console.error('Bootstrap failed:', err);
+      var n2 = document.getElementById('noticeArea');
+      if (n2) { n2.textContent = 'データ取得に失敗しました: ' + (err.message || err); n2.style.background = '#fef2f2'; n2.style.borderLeftColor = '#e85050'; }
+    });
+  }
+
+  // ===== お知らせ描画 =====
+  function renderNotice(notice, warning) {
+    var n = document.getElementById('noticeArea');
+    var w = document.getElementById('warningArea');
+    if (n) {
+      if (notice) {
+        n.innerHTML = escapeHtml(notice).replace(/\n/g, '<br>');
+        n.style.display = '';
+      } else {
+        n.style.display = 'none';
+      }
+    }
+    if (w) {
+      if (warning) {
+        w.innerHTML = escapeHtml(warning).replace(/\n/g, '<br>');
+        w.style.display = '';
+      } else {
+        w.style.display = 'none';
+      }
+    }
+  }
+
+  function escapeHtml(s) {
+    if (s === null || s === undefined) return '';
+    return String(s).replace(/[&<>"']/g, function(c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  // ===== 部署プルダウン =====
+  function renderDeptDropdown() {
+    var depts = {};
+    state.workers.forEach(function(w) { if (w.dept) depts[w.dept] = true; });
+    var deptList = Object.keys(depts).sort();
+
+    var sel = document.getElementById('dept-select');
+    sel.innerHTML = '<option value="">-- 部署を選択 --</option>';
+    deptList.forEach(function(d) {
+      var opt = document.createElement('option');
+      opt.value = d;
+      opt.textContent = d;
+      sel.appendChild(opt);
+    });
+
+    sel.addEventListener('change', function() {
+      var nameSel = document.getElementById('name-select');
+      nameSel.innerHTML = '<option value="">-- 名前を選択 --</option>';
+      var names = state.workers.filter(function(w) { return w.dept === sel.value; });
+      names.sort(function(a, b) { return a.name.localeCompare(b.name, 'ja'); });
+      names.forEach(function(w) {
+        var opt = document.createElement('option');
+        opt.value = w.code;
+        opt.textContent = w.name;
+        nameSel.appendChild(opt);
+      });
+    });
+
+    document.getElementById('name-select').addEventListener('change', function() {
+      if (this.value) openCalendarByCode(this.value);
+    });
+  }
+
+  // ===== インクリメンタルサーチ =====
+  function setupSearch() {
+    var input = document.getElementById('name-search');
+    var dropdown = document.getElementById('searchDropdown');
+
+    input.addEventListener('input', function() {
+      var q = this.value.trim();
+      dropdown.innerHTML = '';
+      if (!q) { dropdown.classList.remove('active'); return; }
+      var matches = state.workers.filter(function(w) {
+        return w.name.indexOf(q) !== -1 || (w.code && w.code.indexOf(q) === 0);
+      });
+      if (matches.length === 0) { dropdown.classList.remove('active'); return; }
+      matches.slice(0, 20).forEach(function(w) {
+        var div = document.createElement('div');
+        div.className = 'search-dropdown-item';
+        div.innerHTML = escapeHtml(w.name) + '<span class="dept-tag">' + escapeHtml(w.dept) + '</span>';
+        div.onclick = function() {
+          input.value = w.name;
+          dropdown.classList.remove('active');
+          openCalendarByCode(w.code);
+        };
+        dropdown.appendChild(div);
+      });
+      dropdown.classList.add('active');
+    });
+
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && this.value.trim()) {
+        var q = this.value.trim();
+        var match = state.workers.filter(function(w) { return w.name === q; })[0];
+        if (!match) match = state.workers.filter(function(w) { return w.name.indexOf(q) !== -1; })[0];
+        if (match) {
+          dropdown.classList.remove('active');
+          openCalendarByCode(match.code);
+        }
+      }
+    });
+
+    document.addEventListener('click', function(e) {
+      if (!e.target.closest('.bento-inner')) dropdown.classList.remove('active');
+    });
+  }
+
+  // ===== ボタン類 =====
+  function setupButtons() {
+    document.getElementById('closeBtn').addEventListener('click', closeCalendar);
+    document.getElementById('locationBtn').addEventListener('click', toggleLocationMode);
+    document.getElementById('calendarModal').addEventListener('click', function(e) {
+      if (e.target === this) closeCalendar();
+    });
+  }
+
+  // ===== カレンダーを開く =====
+  function openCalendarByCode(workerCode) {
+    var worker = state.workers.filter(function(w) { return w.code === String(workerCode); })[0];
+    if (!worker) return;
+    state.currentUser = worker;
+    state.locationMode = false;
+    state.hadAnyChangeThisSession = false;
+    document.getElementById('calBentoBox').classList.remove('location-mode');
+    document.getElementById('locationBtn').classList.remove('active');
+
+    document.getElementById('calUser').textContent =
+      worker.name + ' さん ── ' + worker.dept + '・' + worker.location;
+
+    // クラッシュリカバリ: ドラフトがあればマージしてChangeQueueに積む
+    recoverDraftForUser(worker);
+
+    renderCalendar();
+    document.getElementById('calendarModal').classList.add('active');
+  }
+
+  // ===== ドラフト復元 =====
+  function recoverDraftForUser(worker) {
+    var draft = DraftStore.load(worker.code);
+    if (!draft) return;
+    var dates = Object.keys(draft);
+    if (dates.length === 0) return;
+    console.info('Recovering draft: ' + dates.length + ' dates');
+    dates.forEach(function(date) {
+      var d = draft[date];
+      // stateに反映
+      var key = worker.code + '_' + date;
+      state.reservations[key] = {
+        workerCode: worker.code,
+        workerName: worker.name,
+        date: date,
+        orderState: d.orderState || '',
+        location: d.location || worker.location
+      };
+      // ChangeQueueに積む（未送信扱い）
+      ChangeQueue.add({
+        workerCode: worker.code,
+        workerName: worker.name,
+        date: date,
+        orderState: d.orderState || '',
+        location: d.location || worker.location
+      });
+    });
+    state.hadAnyChangeThisSession = true;
+    SaveManager.scheduleSave();
+  }
+
+  // ===== カレンダー描画 =====
+  function renderCalendar() {
+    var today = state.today;
+    var y = today.getFullYear();
+    var m = today.getMonth();  // 0-11
+    var day = today.getDate();
+    var monthStart, monthEnd;
+    if (day >= MONTH_START_DAY) {
+      monthStart = new Date(y, m, 16);
+      monthEnd = new Date(y, m + 1, 15);
+    } else {
+      monthStart = new Date(y, m - 1, 16);
+      monthEnd = new Date(y, m, 15);
+    }
+
+    // タイトル
+    var mEndY = monthEnd.getFullYear();
+    var mEndM = monthEnd.getMonth() + 1;
+    var mStartM = monthStart.getMonth() + 1;
+    document.getElementById('calTitle').textContent =
+      mEndY + '年' + ('0' + mEndM).slice(-2) + '月度（' + mStartM + '/16〜' + mEndM + '/15）';
+
+    // グリッド生成
+    var grid = document.getElementById('calGrid');
+    grid.innerHTML = '';
+
+    // 日付配列を生成
+    var dates = [];
+    var cur = new Date(monthStart);
+    while (cur <= monthEnd) {
+      dates.push(new Date(cur));
+      cur.setDate(cur.getDate() + 1);
+    }
+
+    var lastMonthRendered = -1;
+    dates.forEach(function(d) {
+      var dMonth = d.getMonth();
+      var dow = d.getDay();
+
+      // 月が変わったら月ラベルを挿入し、その曜日まで空セルで埋める
+      if (dMonth !== lastMonthRendered) {
+        var labelDiv = document.createElement('div');
+        labelDiv.className = 'month-label';
+        labelDiv.textContent = '── ' + (dMonth + 1) + '月 ──';
+        grid.appendChild(labelDiv);
+        // ラベル（全幅）の後、その日の曜日まで空セルを挿入
+        for (var i = 0; i < dow; i++) {
+          var empty = document.createElement('div');
+          empty.className = 'cal-cell empty-cell';
+          grid.appendChild(empty);
+        }
+        lastMonthRendered = dMonth;
+      }
+      grid.appendChild(buildCell(d));
+    });
+
+    renderSummary(monthStart, monthEnd);
+  }
+
+  function buildCell(d) {
+    var dateStr = formatYmd(d);
+    var dow = d.getDay();
+    var cell = document.createElement('div');
+    cell.className = 'cal-cell';
+    cell.setAttribute('data-date', dateStr);
+
+    var dateNum = document.createElement('span');
+    dateNum.className = 'date-num';
+    if (dow === 0) dateNum.className += ' sun';
+    else if (dow === 6) dateNum.className += ' sat';
+    dateNum.textContent = d.getDate();
+    cell.appendChild(dateNum);
+
+    // カレンダーマスタ判定
+    var calEntry = state.calendarMap[dateStr];
+    var isWorkSat = calEntry && calEntry.type === '出勤土曜';
+    var isHolidayExplicit = calEntry && (calEntry.type === '休日' || calEntry.type === '祝日');
+    var isHoliday = isHolidayExplicit || (dow === 0) || (dow === 6 && !isWorkSat);
+
+    if (isHoliday) {
+      cell.className = 'cal-cell holiday';
+      var icon = document.createElement('span');
+      icon.className = 'order-icon';
+      icon.style.color = '#ccc';
+      icon.textContent = '━';
+      cell.appendChild(icon);
+      var label = document.createElement('span');
+      label.className = 'holiday-label';
+      label.textContent = calEntry && calEntry.type === '祝日' ? (calEntry.note || '祝日') : '休日';
+      cell.appendChild(label);
+      return cell;
+    }
+
+    if (isWorkSat) {
+      cell.classList.add('work-sat');
+    }
+
+    // 予約状態取得
+    var rez = state.reservations[state.currentUser.code + '_' + dateStr];
+    var orderState = rez ? rez.orderState : '';
+    var location = rez ? rez.location : state.currentUser.location;
+
+    applyCellDisplay(cell, orderState, location);
+
+    // 今日ハイライト
+    if (dateStr === state.todayStr) cell.classList.add('today');
+
+    // 過去・締切済み・予約不可期間
+    if (dateStr < state.todayStr) {
+      cell.classList.add('disabled');
+    } else if (dateStr === state.todayStr && isPastTodayDeadline()) {
+      cell.classList.add('disabled');
+    } else if (isWorkSat && isPastSatDeadline(dateStr)) {
+      cell.classList.add('disabled');
+    } else if (isBeyondWindow(dateStr)) {
+      cell.classList.add('future-locked');
+    } else {
+      cell.addEventListener('click', function() { onCellClick(dateStr, cell); });
+    }
+
+    return cell;
+  }
+
+  function applyCellDisplay(cell, orderState, location) {
+    // 既存の状態クラスを除去
+    cell.classList.remove('empty', 'bento', 'okazu');
+    // 子要素からorder-icon, order-label, location-badgeを除去
+    Array.prototype.slice.call(cell.querySelectorAll('.order-icon, .order-label, .location-badge')).forEach(function(el) {
+      el.parentNode.removeChild(el);
+    });
+
+    var icon = document.createElement('span');
+    icon.className = 'order-icon';
+    var label = document.createElement('span');
+    label.className = 'order-label';
+
+    if (orderState === 'bento') {
+      cell.classList.add('bento');
+      icon.textContent = '🍙';
+      label.textContent = '弁当';
+    } else if (orderState === 'okazu') {
+      cell.classList.add('okazu');
+      icon.textContent = '🥢';
+      label.textContent = 'おかずのみ';
+    } else {
+      cell.classList.add('empty');
+      icon.textContent = '━';
+      label.textContent = 'なし';
+    }
+    cell.appendChild(icon);
+    cell.appendChild(label);
+
+    // 拠点バッジ（注文ありの場合のみ）
+    if (orderState && location) {
+      var badge = document.createElement('span');
+      badge.className = 'location-badge ' + (location === '新工場' ? 'shin' : 'honsha');
+      badge.textContent = location === '新工場' ? '📍新' : '📍本';
+      cell.appendChild(badge);
+    }
+  }
+
+  // ===== セルクリック（3状態トグル or 拠点切替） =====
+  function onCellClick(dateStr, cell) {
+    if (!state.currentUser) return;
+
+    if (state.locationMode) {
+      toggleLocation(dateStr, cell);
+      return;
+    }
+
+    // 注文状態トグル
+    var rez = state.reservations[state.currentUser.code + '_' + dateStr];
+    var cur = rez ? rez.orderState : '';
+    var next = cur === '' ? 'bento' : cur === 'bento' ? 'okazu' : '';
+    var location = (rez && rez.location) || state.currentUser.location;
+
+    var updated = {
+      workerCode: state.currentUser.code,
+      workerName: state.currentUser.name,
+      date: dateStr,
+      orderState: next,
+      location: location,
+      updatedAt: new Date().toISOString(),
+      updatedBy: INIT_CURRENT_USER_EMAIL
+    };
+    state.reservations[state.currentUser.code + '_' + dateStr] = updated;
+
+    applyCellDisplay(cell, next, location);
+
+    ChangeQueue.add({
+      workerCode: state.currentUser.code,
+      workerName: state.currentUser.name,
+      date: dateStr,
+      orderState: next,
+      location: location
+    });
+    DraftStore.save(state.currentUser.code, [{ date: dateStr, orderState: next, location: location }]);
+    SaveManager.scheduleSave();
+    state.hadAnyChangeThisSession = true;
+
+    // 集計再描画
+    var today = state.today;
+    var y = today.getFullYear(), mo = today.getMonth(), da = today.getDate();
+    var ms, me;
+    if (da >= MONTH_START_DAY) { ms = new Date(y, mo, 16); me = new Date(y, mo + 1, 15); }
+    else { ms = new Date(y, mo - 1, 16); me = new Date(y, mo, 15); }
+    renderSummary(ms, me);
+  }
+
+  function toggleLocation(dateStr, cell) {
+    if (!state.currentUser) return;
+    var rez = state.reservations[state.currentUser.code + '_' + dateStr];
+    if (!rez || !rez.orderState) return;  // 注文なしの日は拠点変更不可
+    var next = rez.location === '新工場' ? '本社工場' : '新工場';
+    var updated = Object.assign({}, rez, { location: next });
+    state.reservations[state.currentUser.code + '_' + dateStr] = updated;
+    applyCellDisplay(cell, rez.orderState, next);
+
+    ChangeQueue.add({
+      workerCode: state.currentUser.code,
+      workerName: state.currentUser.name,
+      date: dateStr,
+      orderState: rez.orderState,
+      location: next
+    });
+    DraftStore.save(state.currentUser.code, [{ date: dateStr, orderState: rez.orderState, location: next }]);
+    SaveManager.scheduleSave();
+  }
+
+  // ===== 締切判定 =====
+  function isPastTodayDeadline() {
+    var now = new Date();
+    return now.getHours() >= DEADLINE_HOUR;
+  }
+
+  function isPastSatDeadline(satDateStr) {
+    // 出勤土曜の前日（金曜）15:00締切
+    var sat = new Date(satDateStr + 'T00:00:00+09:00');
+    var fri = new Date(sat);
+    fri.setDate(fri.getDate() - 1);
+    var friStr = formatYmd(fri);
+    var now = new Date();
+    var nowStr = formatYmd(now);
+    if (nowStr > friStr) return true;
+    if (nowStr === friStr && now.getHours() >= SAT_DEADLINE_HOUR) return true;
+    return false;
+  }
+
+  function isBeyondWindow(dateStr) {
+    var today = new Date(state.todayStr + 'T00:00:00+09:00');
+    var limit = new Date(today);
+    limit.setDate(limit.getDate() + RESERVATION_WINDOW_DAYS);
+    var target = new Date(dateStr + 'T00:00:00+09:00');
+    return target > limit;
+  }
+
+  // ===== 集計描画 =====
+  function renderSummary(monthStart, monthEnd) {
+    if (!state.currentUser) return;
+    var el = document.getElementById('calSummary');
+    el.innerHTML = '';
+
+    var code = state.currentUser.code;
+    var bentoTotal = 0, bentoDone = 0, bentoPlan = 0;
+    var okazuTotal = 0, okazuDone = 0, okazuPlan = 0;
+
+    var cur = new Date(monthStart);
+    while (cur <= monthEnd) {
+      var ds = formatYmd(cur);
+      var rez = state.reservations[code + '_' + ds];
+      if (rez && rez.orderState) {
+        var isPast = ds < state.todayStr;
+        if (rez.orderState === 'bento') {
+          bentoTotal++;
+          if (isPast) bentoDone++; else bentoPlan++;
+        } else if (rez.orderState === 'okazu') {
+          okazuTotal++;
+          if (isPast) okazuDone++; else okazuPlan++;
+        }
+      }
+      cur.setDate(cur.getDate() + 1);
+    }
+
+    var total = bentoTotal + okazuTotal;
+    var monthKey = (monthEnd.getMonth() + 1) + '月度';
+
+    var html = '';
+    html += '<div class="cal-summary-item"><span class="label" style="font-weight:700; font-size:15px;">' + monthKey + '</span></div>';
+    html += '<div class="cal-summary-item"><span class="label">🍱 弁当:</span><span class="count">' + bentoTotal + '</span>個';
+    html += '<span class="sub">（実績' + bentoDone + ' + 予定' + bentoPlan + '）</span></div>';
+    html += '<div class="cal-summary-item"><span class="label">🥢 おかずのみ:</span><span class="count">' + okazuTotal + '</span>個';
+    html += '<span class="sub">（実績' + okazuDone + ' + 予定' + okazuPlan + '）</span></div>';
+    html += '<div class="cal-summary-item"><span class="label">合計:</span><span class="count">' + total + '</span>個</div>';
+
+    el.innerHTML = html;
+  }
+
+  // ===== 拠点変更モード切替 =====
+  function toggleLocationMode() {
+    state.locationMode = !state.locationMode;
+    document.getElementById('calBentoBox').classList.toggle('location-mode', state.locationMode);
+    document.getElementById('locationBtn').classList.toggle('active', state.locationMode);
+  }
+
+  // ===== カレンダーを閉じる =====
+  function closeCalendar() {
+    // 変更があった場合のみトーストを表示
+    var hadChanges = ChangeQueue.hasChanges() || state.hadAnyChangeThisSession === true;
+    if (ChangeQueue.hasChanges()) {
+      flushChanges();
+    }
+    document.getElementById('calendarModal').classList.remove('active');
+    state.locationMode = false;
+    state.hadAnyChangeThisSession = false;
+    document.getElementById('calBentoBox').classList.remove('location-mode');
+    document.getElementById('locationBtn').classList.remove('active');
+
+    if (hadChanges) {
+      var toast = document.getElementById('toast');
+      if (toast) {
+        toast.classList.add('active');
+        setTimeout(function() { toast.classList.remove('active'); }, 2000);
+      }
+    }
+  }
+
+  // ===== ヘルパー =====
+  function formatYmd(d) {
+    var y = d.getFullYear();
+    var m = ('0' + (d.getMonth() + 1)).slice(-2);
+    var day = ('0' + d.getDate()).slice(-2);
+    return y + '-' + m + '-' + day;
+  }
+
+  // ===== 起動 =====
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>

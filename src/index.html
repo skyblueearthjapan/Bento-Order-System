@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title><?= appTitle ?></title>
+<?!= include('style') ?>
+</head>
+<body>
+
+<!-- ===== ヘッダー ===== -->
+<header class="header">
+  <div class="header-title"><span class="emoji">🍱</span><?= appTitle ?></div>
+  <a href="<?= portalUrl ?>" target="_top" class="portal-btn">社内ポータルへ移動</a>
+</header>
+
+<!-- ===== 食べ物デコレーション ===== -->
+<div class="deco-container">
+  <span class="food-deco" style="top:60px;left:5%;">🍙</span>
+  <span class="food-deco" style="top:120px;right:8%;">🥚</span>
+  <span class="food-deco" style="top:220px;left:3%;">🍱</span>
+  <span class="food-deco" style="top:340px;right:5%;">🍙</span>
+  <span class="food-deco" style="top:420px;left:7%;">🥢</span>
+  <span class="food-deco" style="top:180px;right:3%;">🍵</span>
+</div>
+
+<!-- ===== トースト通知 ===== -->
+<div class="toast" id="toast">保存しました</div>
+
+<!-- ===== TOP画面 ===== -->
+<main class="top-container">
+
+  <div class="info-box">
+    <h3>🍱 お弁当手配ルール</h3>
+    <ul>
+      <li>業者: 西原屋（℡259-9291、短縮68番）</li>
+      <li>弁当: ¥450 / おかずのみ: ¥350</li>
+      <li>締切: 当日AM9:00まで（出勤土曜分は金曜15時まで）</li>
+      <li>期間: 月の16日～翌月15日の1ヶ月単位</li>
+    </ul>
+  </div>
+
+  <div class="notice" id="noticeArea">
+    <!-- JSで上書き（初期値は空でOK、api_bootstrapで設定） -->
+    読み込み中...
+  </div>
+
+  <div class="warning" id="warningArea">
+    <!-- JSで上書き -->
+  </div>
+
+  <!-- プルダウン（補助導線） -->
+  <div class="pulldown-section">
+    <div class="pulldown-label">部署から探す場合はこちら</div>
+    <div class="pulldown-row">
+      <select id="dept-select">
+        <option value="">-- 部署を選択 --</option>
+      </select>
+      <select id="name-select">
+        <option value="">-- 名前を選択 --</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- お弁当箱型 検索窓（主導線） -->
+  <div class="bento-search-wrap">
+    <div class="bento-box-search">
+      <div class="bento-lid">お名前を入力してください</div>
+      <div class="bento-inner">
+        <input type="text" id="name-search" placeholder="例: 田村 修二" autocomplete="off">
+        <div class="search-dropdown" id="searchDropdown"></div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- ===== カレンダーモーダル ===== -->
+<div class="modal-overlay" id="calendarModal">
+  <div class="calendar-modal">
+    <div class="cal-bento-box" id="calBentoBox">
+
+      <!-- 蓋（ヘッダー）+ 保存状態 -->
+      <div class="cal-lid">
+        <div class="cal-lid-left">
+          <div class="cal-lid-title" id="calTitle">月度</div>
+          <div class="cal-lid-user" id="calUser">ユーザー名</div>
+        </div>
+        <div class="cal-lid-right">
+          <div class="cal-save-status">
+            <span class="cal-save-dot" id="saveDot"></span>
+            <span id="saveLabel">保存済み</span>
+          </div>
+          <button class="cal-close-btn" type="button" id="closeBtn">✕</button>
+        </div>
+      </div>
+
+      <!-- 拠点変更モードバナー -->
+      <div class="location-mode-banner">📍 拠点変更モード中 ─ 日付をクリックで拠点を切替</div>
+
+      <!-- 集計 -->
+      <div class="cal-summary" id="calSummary"></div>
+
+      <!-- カレンダー本体 -->
+      <div class="cal-inner">
+        <div class="cal-mode-bar">
+          <span class="cal-mode-label">クリックで注文切替: ー → ○ → お → ー</span>
+          <button class="cal-location-btn" type="button" id="locationBtn">📍 拠点変更</button>
+        </div>
+
+        <div class="cal-weekdays">
+          <div class="cal-weekday sun">日</div>
+          <div class="cal-weekday">月</div>
+          <div class="cal-weekday">火</div>
+          <div class="cal-weekday">水</div>
+          <div class="cal-weekday">木</div>
+          <div class="cal-weekday">金</div>
+          <div class="cal-weekday sat">土</div>
+        </div>
+
+        <div class="cal-grid" id="calGrid"></div>
+
+        <div class="cal-legend">
+          <div class="legend-item"><div class="legend-icon bento">🍙</div>弁当 ¥450</div>
+          <div class="legend-item"><div class="legend-icon okazu">🥢</div>おかずのみ ¥350</div>
+          <div class="legend-item"><div class="legend-icon empty">━</div>注文なし</div>
+          <div class="legend-item"><div class="legend-icon holiday">休</div>休日</div>
+          <div class="legend-item"><div class="legend-icon locked">🔒</div>確定済み</div>
+          <div class="legend-item"><div class="legend-icon locked">🕐</div>予約不可</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+  var INIT_TODAY = <?!= JSON.stringify(todayStr) ?>;
+  var INIT_CURRENT_USER_EMAIL = <?!= JSON.stringify(currentUserEmail) ?>;
+</script>
+<?!= include('ui.js') ?>
+
+</body>
+</html>

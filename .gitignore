@@ -1,0 +1,16 @@
+# inout-board は参考用のクローン（別リポジトリ）
+inout-board/
+
+# OMC設定
+.omc/
+
+# OSキャッシュ
+.DS_Store
+Thumbs.db
+
+# エディタ
+.vscode/
+.idea/
+
+# ログ
+*.log
