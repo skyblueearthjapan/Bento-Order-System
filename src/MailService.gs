@@ -365,6 +365,82 @@ function saturdayDeadlineMailJob() {
 }
 
 /**
+ * メール送信周りの診断ヘルパー
+ * GASエディタから実行 → 実行ログ画面で確認
+ * 1) mail_recipients シートの生値
+ * 2) getMailRecipients() の結果
+ * 3) 登録済みトリガー一覧
+ * 4) MailApp の残り送信可能数
+ * 5) 実際に1通テスト送信
+ */
+function debugMailSetup() {
+  Logger.log('===== Mail diagnostics =====');
+
+  // 1) 生のシート内容
+  try {
+    var sheet = getOrCreateSheet(SHEET_EMAIL_RECIPIENTS, ['名前', 'メールアドレス', '有効フラグ']);
+    var lastRow = sheet.getLastRow();
+    Logger.log('[1] mail_recipients sheet: lastRow=' + lastRow);
+    if (lastRow >= 2) {
+      var raw = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
+      raw.forEach(function(r, i) {
+        Logger.log('  row ' + (i + 2) + ': name="' + r[0] + '", email="' + r[1] + '", flag="' + r[2] + '" (flagType=' + typeof r[2] + ', flagLen=' + String(r[2] || '').length + ')');
+      });
+    }
+  } catch (e) {
+    Logger.log('[1] sheet read error: ' + e.message);
+  }
+
+  // 2) getMailRecipients() の結果
+  try {
+    var recipients = SheetService.getMailRecipients();
+    Logger.log('[2] getMailRecipients() returned ' + recipients.length + ' addresses:');
+    recipients.forEach(function(r) { Logger.log('  - ' + r); });
+  } catch (e) {
+    Logger.log('[2] getMailRecipients error: ' + e.message);
+  }
+
+  // 3) トリガー一覧
+  try {
+    var triggers = ScriptApp.getProjectTriggers();
+    Logger.log('[3] Project triggers: ' + triggers.length);
+    triggers.forEach(function(t) {
+      Logger.log('  - ' + t.getHandlerFunction() + ' / ' + t.getEventType());
+    });
+  } catch (e) {
+    Logger.log('[3] triggers error: ' + e.message);
+  }
+
+  // 4) MailApp 残量
+  try {
+    var remaining = MailApp.getRemainingDailyQuota();
+    Logger.log('[4] MailApp remaining quota today: ' + remaining);
+  } catch (e) {
+    Logger.log('[4] quota error: ' + e.message);
+  }
+
+  // 5) テスト送信（getMailRecipients() の最初のアドレスへ）
+  try {
+    var rcp = SheetService.getMailRecipients();
+    if (rcp.length === 0) {
+      Logger.log('[5] No recipients to test with. Add "ON" flag in mail_recipients sheet.');
+    } else {
+      var testTo = rcp[0];
+      MailApp.sendEmail(
+        testTo,
+        '[診断テスト] お弁当予約アプリ - メール送信テスト',
+        'これは debugMailSetup() からのテスト送信です。\n受信できれば mail_recipients シート → MailApp の経路は正常です。\n\n送信時刻: ' + new Date()
+      );
+      Logger.log('[5] Test mail sent to: ' + testTo);
+    }
+  } catch (e) {
+    Logger.log('[5] test send error: ' + e.message);
+  }
+
+  Logger.log('===== End diagnostics =====');
+}
+
+/**
  * サンプルメール送信（架空データ45名分・指定アドレス1件のみへ送信）
  * GASエディタから sendSampleMail を選んで手動実行する用途
  */
