@@ -130,3 +130,27 @@ function dailyReportJob() {
     Logger.log('dailyReportJob error: ' + err.message);
   }
 }
+
+/**
+ * サンプルメール送信（指定アドレス1件のみへ送信、件名に[サンプル]を付与）
+ * GASエディタから手動実行する用途
+ */
+function sendSampleMail() {
+  var to = 'imaizumi@lineworks.co.jp';
+  var today = formatDateYmd(new Date());
+  var summary = ReportService.generateReportSummary(today);
+  var dLabel = Utilities.formatDate(new Date(today + 'T00:00:00+09:00'), 'Asia/Tokyo', 'yyyy年MM月dd日');
+  var subject = '[サンプル]【お弁当注文表】本日分のお弁当注文一覧（' + dLabel + '）';
+  var body = '※ これはサンプル送信です。本日（' + dLabel + '）時点のデータで生成しています。\n\n'
+           + MailService.buildMailBody(summary);
+
+  var options = {};
+  try {
+    var ss = ReportService.getOrCreateAdminSpreadsheet();
+    options.attachments = [MailService.exportSpreadsheetAsExcel(ss.getId())];
+  } catch (e) {
+    Logger.log('Sample mail: Excel export failed: ' + e.message);
+  }
+  MailApp.sendEmail(to, subject, body, options);
+  Logger.log('Sample mail sent to: ' + to);
+}
