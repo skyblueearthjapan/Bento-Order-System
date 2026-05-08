@@ -263,14 +263,35 @@ var MailService = (function() {
       var satD = new Date(satDate + 'T00:00:00+09:00');
       var subject = '【お弁当注文表・追加変更】明日（出勤土曜 ' + Utilities.formatDate(satD, 'Asia/Tokyo', 'MM月dd日') + '）分の最終確定';
       var body = _buildSatSupplementalBody(satDate, current, diff);
-      recipients.forEach(function(to) {
-        try {
-          MailApp.sendEmail(to, subject, body);
-          Logger.log('Saturday supplemental sent to: ' + to);
-        } catch (e) {
-          Logger.log('Saturday supplemental send failed to ' + to + ': ' + e.message);
+
+      // 添付: 最終確定後の土曜分Excel
+      var options = {};
+      var tempSsId = null;
+      try {
+        var tempSs = _buildOneDaySpreadsheetFromSummary(current, satDate, 'お弁当予約_土曜最終');
+        tempSsId = tempSs.getId();
+        SpreadsheetApp.flush();
+        options.attachments = [exportSpreadsheetAsExcel(tempSsId)];
+      } catch (e) {
+        Logger.log('Saturday supplemental: attachment generation failed: ' + e.message);
+      }
+
+      try {
+        recipients.forEach(function(to) {
+          try {
+            MailApp.sendEmail(to, subject, body, options);
+            Logger.log('Saturday supplemental sent to: ' + to + ' (attachment=' + (options.attachments ? 'yes' : 'no') + ')');
+          } catch (e) {
+            Logger.log('Saturday supplemental send failed to ' + to + ': ' + e.message);
+          }
+        });
+      } finally {
+        if (tempSsId) {
+          try { DriveApp.getFileById(tempSsId).setTrashed(true); } catch (e) {
+            Logger.log('Trash temp ss failed: ' + e.message);
+          }
         }
-      });
+      }
       _clearSatSnapshot(satDate);
     } catch (err) {
       Logger.log('sendSaturdaySupplementalMail error: ' + err.message);
@@ -403,14 +424,101 @@ function sendSampleSaturdaySupplementalMail() {
            + '件・取消' + diff.removed.length + '件・種別変更' + diff.changed.length + '件）で生成しています。\n\n'
            + MailService.buildSatSupplementalBody(satDate, current, diff);
 
-  SAMPLE_MAIL_TO.forEach(function(to) {
-    try {
-      MailApp.sendEmail(to, subject, body);
-      Logger.log('Sample supplemental mail sent to: ' + to);
-    } catch (e) {
-      Logger.log('Sample supplemental send failed to ' + to + ': ' + e.message);
+  // 添付: 最終確定後の土曜分Excel
+  var options = {};
+  var tempSsId = null;
+  try {
+    var tempSs = _buildOneDaySpreadsheetFromSummary(current, satDate, 'お弁当予約_サンプル土曜最終');
+    tempSsId = tempSs.getId();
+    SpreadsheetApp.flush();
+    options.attachments = [MailService.exportSpreadsheetAsExcel(tempSsId)];
+  } catch (e) {
+    Logger.log('Sample supplemental: attachment generation failed: ' + e.message);
+    body += '\n\n[添付生成エラー] ' + e.message;
+  }
+
+  try {
+    SAMPLE_MAIL_TO.forEach(function(to) {
+      try {
+        MailApp.sendEmail(to, subject, body, options);
+        Logger.log('Sample supplemental mail sent to: ' + to + ' (attachment=' + (options.attachments ? 'yes' : 'no') + ')');
+      } catch (e) {
+        Logger.log('Sample supplemental send failed to ' + to + ': ' + e.message);
+      }
+    });
+  } finally {
+    if (tempSsId) {
+      try { DriveApp.getFileById(tempSsId).setTrashed(true); } catch (e) {
+        Logger.log('Trash temp ss failed: ' + e.message);
+      }
     }
-  });
+  }
+}
+
+/**
+ * サンプル: 金曜朝メール（本日(金)＋翌日(出勤土曜)分・暫定 を併記）
+ * SAMPLE_MAIL_TO 全員に送信
+ */
+function sendSampleFridayMail() {
+  var today = formatDateYmd(new Date());
+  var d = new Date(today + 'T00:00:00+09:00');
+  var nextD = new Date(d);
+  nextD.setDate(nextD.getDate() + 1);
+  var friDate = today;
+  var satDate = formatDateYmd(nextD);
+
+  // 金曜の本日分: 通常規模（35名）
+  var friSummary = _buildSatSampleSummary(friDate,
+    ['田村 修二', '佐藤 健', '鈴木 一郎', '高橋 美咲', '伊藤 大輔', '渡辺 真理', '山本 剛', '中村 結衣', '小林 光', '加藤 智子', '吉田 隆', '山田 花子', '松本 拓也', '井上 由美', '木村 慎一'],
+    ['橋本 一夫', '石川 幸子', '前田 翔太'],
+    ['後藤 雄一', '長谷川 涼', '村上 理恵', '近藤 雅人', '坂本 葵', '遠藤 健一', '青木 恵', '福田 武', '太田 美香', '西村 龍', '藤井 七海', '岡本 真', '三浦 美咲'],
+    ['竹内 大', '金子 由佳', '和田 進', '中川 美鈴']
+  );
+  // 翌日の出勤土曜分・暫定: 17名
+  var satSummary = _buildSatSampleSummary(satDate,
+    ['田村 修二', '佐藤 健', '鈴木 一郎', '高橋 美咲', '伊藤 大輔', '渡辺 真理', '山本 剛', '中村 結衣'],
+    ['橋本 一夫', '石川 幸子'],
+    ['後藤 雄一', '長谷川 涼', '村上 理恵', '近藤 雅人', '坂本 葵', '遠藤 健一'],
+    ['竹内 大']
+  );
+
+  var friLabel = Utilities.formatDate(d, 'Asia/Tokyo', 'yyyy年MM月dd日');
+  var subject = '[サンプル]【お弁当注文表】本日分のお弁当注文一覧（' + friLabel + '）＋翌出勤土曜分（暫定）';
+  var body = '※ これはサンプルメールです。架空の予約データで「金曜朝メール（翌日出勤土曜あり）」を再現しています。\n'
+           + '※ 本日分(' + friSummary.grandTotal.total + '名) ＋ 翌出勤土曜分・暫定(' + satSummary.grandTotal.total + '名)\n\n'
+           + MailService.buildMailBody(friSummary, satSummary);
+
+  // 添付: 本日(金)と翌日(土・暫定)の2列スプレッドシート
+  var options = {};
+  var tempSsId = null;
+  try {
+    var friColLabel = Utilities.formatDate(d, 'Asia/Tokyo', 'MM月dd日') + '(金)';
+    var satColLabel = Utilities.formatDate(nextD, 'Asia/Tokyo', 'MM月dd日') + '(土・暫定)';
+    var tempSs = _buildFridaySampleSpreadsheet(friSummary, satSummary, friColLabel, satColLabel);
+    tempSsId = tempSs.getId();
+    SpreadsheetApp.flush();
+    options.attachments = [MailService.exportSpreadsheetAsExcel(tempSsId)];
+  } catch (e) {
+    Logger.log('Sample Friday: attachment generation failed: ' + e.message);
+    body += '\n\n[添付生成エラー] ' + e.message;
+  }
+
+  try {
+    SAMPLE_MAIL_TO.forEach(function(to) {
+      try {
+        MailApp.sendEmail(to, subject, body, options);
+        Logger.log('Sample Friday mail sent to: ' + to + ' (attachment=' + (options.attachments ? 'yes' : 'no') + ')');
+      } catch (e) {
+        Logger.log('Sample Friday send failed to ' + to + ': ' + e.message);
+      }
+    });
+  } finally {
+    if (tempSsId) {
+      try { DriveApp.getFileById(tempSsId).setTrashed(true); } catch (e) {
+        Logger.log('Trash temp ss failed: ' + e.message);
+      }
+    }
+  }
 }
 
 /**
@@ -443,7 +551,11 @@ function _buildSatSampleSummary(dateStr, shinB, shinO, honB, honO) {
       okazu: byGroup['新工場'].okazu + byGroup['本社工場'].okazu,
       total: byGroup['新工場'].total + byGroup['本社工場'].total
     },
-    groupOrder: ['新工場', '本社工場']
+    groupOrder: ['新工場', '本社工場'],
+    _samplePeople: {
+      '新工場': { bento: shinB, okazu: shinO },
+      '本社工場': { bento: honB, okazu: honO }
+    }
   };
 }
 
@@ -618,58 +730,255 @@ function _buildSampleSummary(dateStr) {
 }
 
 /**
- * サンプル添付用の一時スプレッドシートを生成
+ * "氏名（弁当）" / "氏名（おかずのみ）" を分解
+ */
+function _parseNTGlobal(nt) {
+  var m = String(nt).match(/^(.+?)（(.+?)）$/);
+  return m ? { name: m[1], type: m[2] } : { name: String(nt), type: '' };
+}
+
+/**
+ * サマリの byGroup[group].names から bento/okazu の氏名リストを再構築
+ */
+function _peopleListsFromSummary(summary) {
+  var result = { '新工場': { bento: [], okazu: [] }, '本社工場': { bento: [], okazu: [] } };
+  ['新工場', '本社工場'].forEach(function(g) {
+    var names = (summary.byGroup[g] && summary.byGroup[g].names) || [];
+    names.forEach(function(nt) {
+      var p = _parseNTGlobal(nt);
+      if (p.type === '弁当') result[g].bento.push(p.name);
+      else if (p.type === 'おかずのみ') result[g].okazu.push(p.name);
+    });
+  });
+  return result;
+}
+
+/**
+ * 拠点別シート1日分（氏名×1日付）を書き込み
+ */
+function _writeOneDayLocationSheet(sheet, dateLabel, bentoList, okazuList, deptLabel) {
+  var header = ['氏名', '部署', dateLabel];
+  sheet.getRange(1, 1, 1, header.length).setValues([header]);
+  sheet.getRange(1, 1, 1, header.length).setFontWeight('bold').setBackground('#f0e8d8');
+  sheet.setFrozenRows(1);
+  sheet.setFrozenColumns(2);
+
+  var rows = [];
+  bentoList.forEach(function(n) { rows.push([n, deptLabel || '', '○']); });
+  okazuList.forEach(function(n) { rows.push([n, deptLabel || '', 'お']); });
+  if (rows.length > 0) {
+    sheet.getRange(2, 1, rows.length, header.length).setValues(rows);
+  }
+
+  var startRow = 2 + rows.length + 1;
+  var summaryRows = [
+    ['弁当', '', bentoList.length],
+    ['おかずのみ', '', okazuList.length],
+    ['合計', '', bentoList.length + okazuList.length]
+  ];
+  sheet.getRange(startRow, 1, 3, header.length).setValues(summaryRows);
+  sheet.getRange(startRow, 1, 3, 1).setFontWeight('bold');
+  sheet.getRange(startRow, 1, 3, header.length).setBackground('#fff8ea');
+  sheet.autoResizeColumn(1);
+}
+
+/**
+ * 全拠点合計シート1日分（拠点列付き、両拠点の氏名を全列挙）
+ */
+function _writeOneDayCombinedSheet(sheet, dateLabel, peopleByGroup) {
+  var header = ['氏名', '拠点', dateLabel];
+  sheet.getRange(1, 1, 1, header.length).setValues([header]);
+  sheet.getRange(1, 1, 1, header.length).setFontWeight('bold').setBackground('#f0e8d8');
+  sheet.setFrozenRows(1);
+  sheet.setFrozenColumns(2);
+
+  var rows = [];
+  ['新工場', '本社工場'].forEach(function(g) {
+    peopleByGroup[g].bento.forEach(function(n) { rows.push([n, g, '○']); });
+    peopleByGroup[g].okazu.forEach(function(n) { rows.push([n, g, 'お']); });
+  });
+  if (rows.length > 0) {
+    sheet.getRange(2, 1, rows.length, header.length).setValues(rows);
+  }
+
+  var totalBento = peopleByGroup['新工場'].bento.length + peopleByGroup['本社工場'].bento.length;
+  var totalOkazu = peopleByGroup['新工場'].okazu.length + peopleByGroup['本社工場'].okazu.length;
+  var startRow = 2 + rows.length + 1;
+  var summaryRows = [
+    ['弁当', '', totalBento],
+    ['おかずのみ', '', totalOkazu],
+    ['合計', '', totalBento + totalOkazu]
+  ];
+  sheet.getRange(startRow, 1, 3, header.length).setValues(summaryRows);
+  sheet.getRange(startRow, 1, 3, 1).setFontWeight('bold');
+  sheet.getRange(startRow, 1, 3, header.length).setBackground('#fff2e0');
+  sheet.autoResizeColumn(1);
+}
+
+/**
+ * 拠点別シート複数日分（氏名×複数日付）
+ */
+function _writeMultiDayLocationSheet(sheet, dateLabels, peopleByDate, deptLabel) {
+  // peopleByDate: [ { bento:[], okazu:[] }, ... ] 同じ並び順
+  var n = dateLabels.length;
+  var header = ['氏名', '部署'].concat(dateLabels);
+  sheet.getRange(1, 1, 1, header.length).setValues([header]);
+  sheet.getRange(1, 1, 1, header.length).setFontWeight('bold').setBackground('#f0e8d8');
+  sheet.setFrozenRows(1);
+  sheet.setFrozenColumns(2);
+
+  // 全期間で登場した氏名を集約
+  var perPerson = {};
+  peopleByDate.forEach(function(p, idx) {
+    p.bento.forEach(function(name) {
+      if (!perPerson[name]) perPerson[name] = new Array(n).fill('');
+      perPerson[name][idx] = '○';
+    });
+    p.okazu.forEach(function(name) {
+      if (!perPerson[name]) perPerson[name] = new Array(n).fill('');
+      perPerson[name][idx] = 'お';
+    });
+  });
+  var names = Object.keys(perPerson);
+  var rows = names.map(function(name) {
+    return [name, deptLabel || ''].concat(perPerson[name]);
+  });
+  if (rows.length > 0) {
+    sheet.getRange(2, 1, rows.length, header.length).setValues(rows);
+  }
+
+  // 集計行
+  var startRow = 2 + rows.length + 1;
+  var bentoRow = ['弁当', ''], okazuRow = ['おかずのみ', ''], totalRow = ['合計', ''];
+  for (var i = 0; i < n; i++) {
+    bentoRow.push(peopleByDate[i].bento.length);
+    okazuRow.push(peopleByDate[i].okazu.length);
+    totalRow.push(peopleByDate[i].bento.length + peopleByDate[i].okazu.length);
+  }
+  sheet.getRange(startRow, 1, 3, header.length).setValues([bentoRow, okazuRow, totalRow]);
+  sheet.getRange(startRow, 1, 3, 1).setFontWeight('bold');
+  sheet.getRange(startRow, 1, 3, header.length).setBackground('#fff8ea');
+  sheet.autoResizeColumn(1);
+}
+
+/**
+ * 全拠点合計シート複数日分（拠点列付き）
+ */
+function _writeMultiDayCombinedSheet(sheet, dateLabels, peopleByDateByGroup) {
+  // peopleByDateByGroup: [ { '新工場':{bento,okazu}, '本社工場':{bento,okazu} }, ...]
+  var n = dateLabels.length;
+  var header = ['氏名', '拠点'].concat(dateLabels);
+  sheet.getRange(1, 1, 1, header.length).setValues([header]);
+  sheet.getRange(1, 1, 1, header.length).setFontWeight('bold').setBackground('#f0e8d8');
+  sheet.setFrozenRows(1);
+  sheet.setFrozenColumns(2);
+
+  // (氏名, 拠点) ごとに集約
+  var perPerson = {};
+  peopleByDateByGroup.forEach(function(byGroup, idx) {
+    ['新工場', '本社工場'].forEach(function(g) {
+      byGroup[g].bento.forEach(function(name) {
+        var key = name + '|' + g;
+        if (!perPerson[key]) perPerson[key] = { name: name, group: g, cells: new Array(n).fill('') };
+        perPerson[key].cells[idx] = '○';
+      });
+      byGroup[g].okazu.forEach(function(name) {
+        var key = name + '|' + g;
+        if (!perPerson[key]) perPerson[key] = { name: name, group: g, cells: new Array(n).fill('') };
+        perPerson[key].cells[idx] = 'お';
+      });
+    });
+  });
+
+  // 拠点ごとに並べる: 新工場 → 本社工場
+  var rows = [];
+  ['新工場', '本社工場'].forEach(function(g) {
+    Object.keys(perPerson).forEach(function(key) {
+      var p = perPerson[key];
+      if (p.group === g) {
+        rows.push([p.name, g].concat(p.cells));
+      }
+    });
+  });
+  if (rows.length > 0) {
+    sheet.getRange(2, 1, rows.length, header.length).setValues(rows);
+  }
+
+  // 集計行
+  var startRow = 2 + rows.length + 1;
+  var bentoRow = ['弁当', ''], okazuRow = ['おかずのみ', ''], totalRow = ['合計', ''];
+  for (var i = 0; i < n; i++) {
+    var b = peopleByDateByGroup[i]['新工場'].bento.length + peopleByDateByGroup[i]['本社工場'].bento.length;
+    var o = peopleByDateByGroup[i]['新工場'].okazu.length + peopleByDateByGroup[i]['本社工場'].okazu.length;
+    bentoRow.push(b); okazuRow.push(o); totalRow.push(b + o);
+  }
+  sheet.getRange(startRow, 1, 3, header.length).setValues([bentoRow, okazuRow, totalRow]);
+  sheet.getRange(startRow, 1, 3, 1).setFontWeight('bold');
+  sheet.getRange(startRow, 1, 3, header.length).setBackground('#fff2e0');
+  sheet.autoResizeColumn(1);
+}
+
+/**
+ * 1日分のサンプル添付スプレッドシートを生成（全拠点合計シートも全員の名前付き）
  */
 function _buildSampleAdminSpreadsheet(summary, dateStr) {
   var stamp = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd_HHmmss');
   var ss = SpreadsheetApp.create('お弁当予約_サンプル_' + stamp);
+  var people = summary._samplePeople || _peopleListsFromSummary(summary);
 
   ['新工場', '本社工場'].forEach(function(group) {
     var sheet = ss.insertSheet(group);
-    var people = summary._samplePeople[group];
-    var header = ['氏名', '部署', dateStr];
-    sheet.getRange(1, 1, 1, header.length).setValues([header]);
-    sheet.getRange(1, 1, 1, header.length).setFontWeight('bold').setBackground('#f0e8d8');
-    sheet.setFrozenRows(1);
-    sheet.setFrozenColumns(2);
-
-    var rows = [];
-    people.bento.forEach(function(name) { rows.push([name, '（サンプル）', '○']); });
-    people.okazu.forEach(function(name) { rows.push([name, '（サンプル）', 'お']); });
-
-    if (rows.length > 0) {
-      sheet.getRange(2, 1, rows.length, header.length).setValues(rows);
-    }
-
-    var summaryStartRow = 2 + rows.length + 1;
-    var summaryRows = [
-      ['弁当', '', people.bento.length],
-      ['おかずのみ', '', people.okazu.length],
-      ['合計', '', people.bento.length + people.okazu.length]
-    ];
-    sheet.getRange(summaryStartRow, 1, 3, header.length).setValues(summaryRows);
-    sheet.getRange(summaryStartRow, 1, 3, 1).setFontWeight('bold');
-    sheet.getRange(summaryStartRow, 1, 3, header.length).setBackground('#fff8ea');
-    sheet.autoResizeColumn(1);
+    _writeOneDayLocationSheet(sheet, dateStr, people[group].bento, people[group].okazu, '（サンプル）');
   });
 
-  // 全拠点合計シート
   var totalSheet = ss.insertSheet('全拠点合計');
-  totalSheet.getRange(1, 1, 1, 4).setValues([['拠点グループ', '弁当', 'おかずのみ', '合計']]);
-  totalSheet.getRange(1, 1, 1, 4).setFontWeight('bold').setBackground('#f0e8d8');
-  totalSheet.setFrozenRows(1);
-  var totalRows = [];
-  ['新工場', '本社工場'].forEach(function(g) {
-    var d = summary.byGroup[g];
-    totalRows.push([g, d.bento, d.okazu, d.total]);
-  });
-  totalRows.push(['【全合計】', summary.grandTotal.bento, summary.grandTotal.okazu, summary.grandTotal.total]);
-  totalSheet.getRange(2, 1, totalRows.length, 4).setValues(totalRows);
-  totalSheet.getRange(2 + totalRows.length - 1, 1, 1, 4).setFontWeight('bold').setBackground('#fff2e0');
+  _writeOneDayCombinedSheet(totalSheet, dateStr, people);
 
-  // デフォルトの「シート1」を削除
   var def = ss.getSheetByName('シート1');
   if (def && ss.getSheets().length > 1) ss.deleteSheet(def);
+  return ss;
+}
 
+/**
+ * 金曜サンプル用: 本日(金)＋翌日(土・暫定)の2日分スプレッドシート
+ */
+function _buildFridaySampleSpreadsheet(friSummary, satSummary, friDateLabel, satDateLabel) {
+  var stamp = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd_HHmmss');
+  var ss = SpreadsheetApp.create('お弁当予約_サンプル金曜_' + stamp);
+  var friPeople = friSummary._samplePeople || _peopleListsFromSummary(friSummary);
+  var satPeople = satSummary._samplePeople || _peopleListsFromSummary(satSummary);
+  var labels = [friDateLabel, satDateLabel];
+
+  ['新工場', '本社工場'].forEach(function(group) {
+    var sheet = ss.insertSheet(group);
+    _writeMultiDayLocationSheet(sheet, labels, [friPeople[group], satPeople[group]], '（サンプル）');
+  });
+
+  var totalSheet = ss.insertSheet('全拠点合計');
+  _writeMultiDayCombinedSheet(totalSheet, labels, [friPeople, satPeople]);
+
+  var def = ss.getSheetByName('シート1');
+  if (def && ss.getSheets().length > 1) ss.deleteSheet(def);
+  return ss;
+}
+
+/**
+ * 1日分のスプレッドシートを実データの summary から生成（土曜追加変更メール用）
+ */
+function _buildOneDaySpreadsheetFromSummary(summary, dateStr, baseName) {
+  var stamp = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd_HHmmss');
+  var ss = SpreadsheetApp.create((baseName || 'お弁当予約_確定') + '_' + stamp);
+  var people = _peopleListsFromSummary(summary);
+
+  ['新工場', '本社工場'].forEach(function(group) {
+    var sheet = ss.insertSheet(group);
+    _writeOneDayLocationSheet(sheet, dateStr, people[group].bento, people[group].okazu, '');
+  });
+
+  var totalSheet = ss.insertSheet('全拠点合計');
+  _writeOneDayCombinedSheet(totalSheet, dateStr, people);
+
+  var def = ss.getSheetByName('シート1');
+  if (def && ss.getSheets().length > 1) ss.deleteSheet(def);
   return ss;
 }
