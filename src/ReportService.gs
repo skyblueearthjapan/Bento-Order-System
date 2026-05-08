@@ -5,11 +5,13 @@
 var ReportService = (function() {
 
   /**
-   * 総務管理用スプレッドシートを取得 or 作成
+   * 月度別の総務管理用スプレッドシートを取得 or 作成
+   * - monthKey 省略時は本日を含む月度（16日以降は翌月度扱い）
+   * - 月度ごとに独立したファイルとなる（例: お弁当予約_総務管理_2026年05月度）
    */
-  function getOrCreateAdminSpreadsheet() {
-    var year = new Date().getFullYear();
-    var fileName = 'お弁当予約_総務管理_' + year + '年度';
+  function getOrCreateAdminSpreadsheet(monthKey) {
+    monthKey = monthKey || getMonthKey(new Date());
+    var fileName = 'お弁当予約_総務管理_' + monthKey;
     var folder = DriveApp.getFolderById(ADMIN_OUTPUT_FOLDER_ID);
     var files = folder.getFilesByName(fileName);
     if (files.hasNext()) {
@@ -114,12 +116,13 @@ var ReportService = (function() {
 
   /**
    * 指定月度の管理シート群を更新
+   * 月度ごとに独立したスプレッドシートを使用するため、シート名は拠点名のみでOK
    */
   function updateAdminSheetsForMonth(monthKey) {
     var range = getMonthRange(monthKey);
     if (!range) return;
 
-    var ss = getOrCreateAdminSpreadsheet();
+    var ss = getOrCreateAdminSpreadsheet(monthKey);
     var workers = SheetService.getWorkers();
     var workersMap = {};
     workers.forEach(function(w) { workersMap[w.code] = w; });
@@ -128,7 +131,7 @@ var ReportService = (function() {
     var dates = _listDates(range.from, range.to);
 
     GROUP_ORDER.forEach(function(group) {
-      var sheetName = monthKey + '_' + group;
+      var sheetName = group;
       var sheet = ss.getSheetByName(sheetName);
       if (!sheet) {
         sheet = ss.insertSheet(sheetName);
@@ -229,7 +232,7 @@ var ReportService = (function() {
     });
 
     // ===== 全グループ合計シート =====
-    var totalSheetName = monthKey + '_全拠点合計';
+    var totalSheetName = '全拠点合計';
     var totalSheet = ss.getSheetByName(totalSheetName);
     if (!totalSheet) {
       totalSheet = ss.insertSheet(totalSheetName);
