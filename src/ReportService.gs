@@ -102,17 +102,15 @@ var ReportService = (function() {
   }
 
   /**
-   * 拠点+スタッフ種類でグループ分け
+   * 拠点でグループ分け（事務所/工場の区別なし、拠点のみで集計）
    */
-  function _getGroupKey(location, staffType) {
-    if (location === LOCATION.SHIN && staffType === STAFF_TYPE.OFFICE) return '新工場事務職員';
-    if (location === LOCATION.SHIN && staffType === STAFF_TYPE.FACTORY) return '新工場';
-    if (location === LOCATION.HONSHA && staffType === STAFF_TYPE.OFFICE) return '本社工場事務職員';
-    if (location === LOCATION.HONSHA && staffType === STAFF_TYPE.FACTORY) return '本社工場';
+  function _getGroupKey(location) {
+    if (location === LOCATION.SHIN) return '新工場';
+    if (location === LOCATION.HONSHA) return '本社工場';
     return null;
   }
 
-  var GROUP_ORDER = ['新工場事務職員', '新工場', '本社工場事務職員', '本社工場'];
+  var GROUP_ORDER = ['新工場', '本社工場'];
 
   /**
    * 指定月度の管理シート群を更新
@@ -146,18 +144,17 @@ var ReportService = (function() {
       sheet.setFrozenColumns(2);
 
       // 該当グループの作業員（日別拠点解決後の配属先で判定）
-      // 各日について、その日の配達拠点がこのグループに該当する作業員を含める
-      // 簡略化: マスタ拠点+スタッフ種類でまず絞り込み、日別で拠点変更があれば別グループへ動的に
+      // マスタ拠点でまず絞り込み、日別で拠点変更があれば別グループへ動的に
       var rows = [];
       var groupWorkers = workers.filter(function(w) {
-        return _getGroupKey(w.location, w.staffType) === group;
+        return _getGroupKey(w.location) === group;
       });
 
       groupWorkers.forEach(function(w) {
         var row = [w.name, w.dept];
         dates.forEach(function(d) {
           var loc = resolveLocationForDate(w.code, d, reservationsMap, workersMap);
-          var g = _getGroupKey(loc, w.staffType);
+          var g = _getGroupKey(loc);
           // この日、このワーカーがこのグループに属するか
           if (g !== group) {
             row.push('');
@@ -180,7 +177,7 @@ var ReportService = (function() {
         var row = [w.name + '※', w.dept];  // 一時配属を示す印
         dates.forEach(function(d) {
           var loc = resolveLocationForDate(w.code, d, reservationsMap, workersMap);
-          var g = _getGroupKey(loc, w.staffType);
+          var g = _getGroupKey(loc);
           if (g !== group) { row.push(''); return; }
           var rez = reservationsMap[w.code + '_' + d];
           if (!rez) { row.push(''); return; }
@@ -253,7 +250,7 @@ var ReportService = (function() {
         var bento = 0, okazu = 0;
         workers.forEach(function(w) {
           var loc = resolveLocationForDate(w.code, dateStr, reservationsMap, workersMap);
-          var g = _getGroupKey(loc, w.staffType);
+          var g = _getGroupKey(loc);
           if (g !== group) return;
           var rez = reservationsMap[w.code + '_' + dateStr];
           if (!rez) return;
@@ -274,7 +271,7 @@ var ReportService = (function() {
       var dayB = 0, dayO = 0;
       workers.forEach(function(w) {
         var loc = resolveLocationForDate(w.code, dateStr, reservationsMap, workersMap);
-        var g = _getGroupKey(loc, w.staffType);
+        var g = _getGroupKey(loc);
         if (!g) return;
         var rez = reservationsMap[w.code + '_' + dateStr];
         if (!rez) return;
@@ -329,7 +326,7 @@ var ReportService = (function() {
       var w = workersMap[r.workerCode];
       if (!w) return;
       var loc = r.location || w.location;
-      var group = _getGroupKey(loc, w.staffType);
+      var group = _getGroupKey(loc);
       if (!group) return;
       if (r.orderState === ORDER_STATE.BENTO) {
         byGroup[group].bento++;
