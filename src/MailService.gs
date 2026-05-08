@@ -444,8 +444,12 @@ function debugMailSetup() {
  * サンプルメール送信（架空データ45名分・指定アドレス1件のみへ送信）
  * GASエディタから sendSampleMail を選んで手動実行する用途
  */
+var SAMPLE_MAIL_TO = [
+  'imaizumi@lineworks.co.jp',
+  'c-matusita@lineworks.co.jp'
+];
+
 function sendSampleMail() {
-  var to = 'imaizumi@lineworks.co.jp';
   var today = formatDateYmd(new Date());
   var dLabel = Utilities.formatDate(new Date(today + 'T00:00:00+09:00'), 'Asia/Tokyo', 'yyyy年MM月dd日');
   var summary = _buildSampleSummary(today);
@@ -466,8 +470,14 @@ function sendSampleMail() {
   }
 
   try {
-    MailApp.sendEmail(to, subject, body, options);
-    Logger.log('Sample mail sent to: ' + to + ' (attachment=' + (options.attachments ? 'yes' : 'no') + ')');
+    SAMPLE_MAIL_TO.forEach(function(to) {
+      try {
+        MailApp.sendEmail(to, subject, body, options);
+        Logger.log('Sample mail sent to: ' + to + ' (attachment=' + (options.attachments ? 'yes' : 'no') + ')');
+      } catch (e) {
+        Logger.log('Sample mail send failed to ' + to + ': ' + e.message);
+      }
+    });
   } finally {
     if (tempSsId) {
       try { DriveApp.getFileById(tempSsId).setTrashed(true); } catch (e) {
