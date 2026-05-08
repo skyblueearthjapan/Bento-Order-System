@@ -22,9 +22,18 @@ var MailService = (function() {
   }
 
   /**
-   * メール本文を生成
+   * 拠点ごとの集計1行を整形
    */
-  function buildMailBody(summary) {
+  function _formatGroupLine(label, g) {
+    return '▼ ' + label + '：' + g.total + '名（弁当' + g.bento + ' / おかずのみ' + g.okazu + '）';
+  }
+
+  /**
+   * メール本文を生成
+   * @param summary 当日分の集計
+   * @param nextDaySatSummary 翌日が出勤土曜の場合の集計（任意）
+   */
+  function buildMailBody(summary, nextDaySatSummary) {
     var d = new Date(summary.date + 'T00:00:00+09:00');
     var dateLabel = Utilities.formatDate(d, 'Asia/Tokyo', 'yyyy年MM月dd日');
     var timeStr = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'HH:mm');
@@ -46,8 +55,8 @@ var MailService = (function() {
     var bg = summary.byGroup;
     var shin = bg['新工場'] || { bento: 0, okazu: 0, total: 0, names: [] };
     var honsha = bg['本社工場'] || { bento: 0, okazu: 0, total: 0, names: [] };
-    lines.push('▼ 新工場：' + shin.total + '名（弁当' + shin.bento + ' / おかずのみ' + shin.okazu + '）');
-    lines.push('▼ 本社工場：' + honsha.total + '名（弁当' + honsha.bento + ' / おかずのみ' + honsha.okazu + '）');
+    lines.push(_formatGroupLine('新工場', shin));
+    lines.push(_formatGroupLine('本社工場', honsha));
     lines.push('');
     lines.push('▼ 全体合計：' + summary.grandTotal.total + '名（弁当' + summary.grandTotal.bento + ' + おかずのみ' + summary.grandTotal.okazu + '）');
     lines.push('');
@@ -63,6 +72,31 @@ var MailService = (function() {
         lines.push('　' + d2.names.join('、'));
       }
     });
+
+    // ===== 翌日が出勤土曜の場合: 暫定集計を併記 =====
+    if (nextDaySatSummary) {
+      var satD = new Date(nextDaySatSummary.date + 'T00:00:00+09:00');
+      var satLabel = Utilities.formatDate(satD, 'Asia/Tokyo', 'MM月dd日');
+      lines.push('');
+      lines.push('━━━━━━━━━━━━━━━━━━━━');
+      lines.push('【明日（出勤土曜 ' + satLabel + '）分・暫定】 締切: 本日15:00');
+      lines.push('━━━━━━━━━━━━━━━━━━━━');
+      var nbg = nextDaySatSummary.byGroup;
+      lines.push(_formatGroupLine('新工場', nbg['新工場'] || { bento: 0, okazu: 0, total: 0, names: [] }));
+      lines.push(_formatGroupLine('本社工場', nbg['本社工場'] || { bento: 0, okazu: 0, total: 0, names: [] }));
+      lines.push('');
+      lines.push('▼ 全体合計：' + nextDaySatSummary.grandTotal.total + '名（弁当' + nextDaySatSummary.grandTotal.bento + ' + おかずのみ' + nextDaySatSummary.grandTotal.okazu + '）');
+      lines.push('');
+      lines.push('【明日分・手配者名一覧】');
+      nextDaySatSummary.groupOrder.forEach(function(g) {
+        var d3 = nextDaySatSummary.byGroup[g];
+        lines.push('■ ' + g + ':');
+        lines.push('　' + (d3.names.length === 0 ? '（なし）' : d3.names.join('、')));
+      });
+      lines.push('');
+      lines.push('※ 上記は本日朝時点の暫定値です。本日15時の締切後に変更があれば、別途「追加変更」メールでお知らせします。');
+    }
+
     lines.push('');
     lines.push('※ 詳細は添付Excelをご参照ください。');
     lines.push('※ このメールはお弁当予約アプリより自動送信されています。');
@@ -71,7 +105,182 @@ var MailService = (function() {
   }
 
   /**
+   * 翌日が出勤土曜なら、その日付（YYYY-MM-DD）を返す。それ以外は null。
+   */
+  function _nextDayIfWorkSat(dateStr) {
+    var d = new Date(dateStr + 'T00:00:00+09:00');
+    d.setDate(d.getDate() + 1);
+    var nextStr = formatDateYmd(d);
+    try {
+      return SheetService.isWorkSaturday(nextStr) ? nextStr : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * 出勤土曜分のスナップショット保存・取得・削除
+   */
+  function _saveSatSnapshot(dateStr, summary) {
+    var minimal = {
+      date: summary.date,
+      byGroup: {},
+      grandTotal: summary.grandTotal,
+      groupOrder: summary.groupOrder
+    };
+    summary.groupOrder.forEach(function(g) {
+      var d = summary.byGroup[g];
+      minimal.byGroup[g] = { bento: d.bento, okazu: d.okazu, total: d.total, names: d.names.slice() };
+    });
+    PropertiesService.getScriptProperties().setProperty('sat_snapshot_' + dateStr, JSON.stringify(minimal));
+  }
+  function _getSatSnapshot(dateStr) {
+    var s = PropertiesService.getScriptProperties().getProperty('sat_snapshot_' + dateStr);
+    return s ? JSON.parse(s) : null;
+  }
+  function _clearSatSnapshot(dateStr) {
+    PropertiesService.getScriptProperties().deleteProperty('sat_snapshot_' + dateStr);
+  }
+
+  /**
+   * 名前リスト「氏名（弁当）」「氏名（おかずのみ）」を分解
+   */
+  function _parseNameType(nt) {
+    var m = String(nt).match(/^(.+?)（(.+?)）$/);
+    return m ? { name: m[1], type: m[2] } : { name: String(nt), type: '' };
+  }
+
+  /**
+   * スナップショットと現在の集計を比較し、差分を計算
+   * 戻り値: { added:[name+type], removed:[name+type], changed:[{name, from, to}] }
+   */
+  function _diffSatSummary(snapshot, current) {
+    var snap = {};   // name → type
+    var curr = {};
+    if (snapshot) {
+      snapshot.groupOrder.forEach(function(g) {
+        (snapshot.byGroup[g].names || []).forEach(function(nt) {
+          var p = _parseNameType(nt); snap[p.name] = p.type;
+        });
+      });
+    }
+    current.groupOrder.forEach(function(g) {
+      (current.byGroup[g].names || []).forEach(function(nt) {
+        var p = _parseNameType(nt); curr[p.name] = p.type;
+      });
+    });
+    var added = [], removed = [], changed = [];
+    Object.keys(curr).forEach(function(name) {
+      if (!(name in snap)) {
+        added.push(name + '（' + curr[name] + '）');
+      } else if (snap[name] !== curr[name]) {
+        changed.push({ name: name, from: snap[name], to: curr[name] });
+      }
+    });
+    Object.keys(snap).forEach(function(name) {
+      if (!(name in curr)) removed.push(name + '（' + snap[name] + '）');
+    });
+    return { added: added, removed: removed, changed: changed };
+  }
+
+  /**
+   * 出勤土曜分の追加変更メール本文
+   */
+  function _buildSatSupplementalBody(satDateStr, current, diff) {
+    var satD = new Date(satDateStr + 'T00:00:00+09:00');
+    var satLabel = Utilities.formatDate(satD, 'Asia/Tokyo', 'yyyy年MM月dd日');
+    var timeStr = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'HH:mm');
+    var lines = [];
+    lines.push('総務ご担当者様');
+    lines.push('');
+    lines.push('お疲れ様です。');
+    lines.push('本日朝のメールでお知らせした明日（' + satLabel + '・出勤土曜）分の');
+    lines.push('お弁当注文に変更がありました。最終確定状況をご連絡いたします。');
+    lines.push('');
+    lines.push('■ 対象日: ' + satLabel);
+    lines.push('■ 締切時刻: 本日15:00');
+    lines.push('■ 確定時刻: ' + timeStr);
+    lines.push('');
+    lines.push('━━━━━━━━━━━━━━━━━━━━');
+    lines.push('【朝メールからの変更点】');
+    lines.push('━━━━━━━━━━━━━━━━━━━━');
+    lines.push('▼ 追加: ' + diff.added.length + '件');
+    diff.added.forEach(function(s) { lines.push('　・' + s); });
+    lines.push('▼ 取消: ' + diff.removed.length + '件');
+    diff.removed.forEach(function(s) { lines.push('　・' + s); });
+    lines.push('▼ 種別変更: ' + diff.changed.length + '件');
+    diff.changed.forEach(function(c) { lines.push('　・' + c.name + '：' + c.from + ' → ' + c.to); });
+    lines.push('');
+    lines.push('━━━━━━━━━━━━━━━━━━━━');
+    lines.push('【最終確定後の集計】');
+    lines.push('━━━━━━━━━━━━━━━━━━━━');
+    var bg = current.byGroup;
+    lines.push(_formatGroupLine('新工場', bg['新工場'] || { bento: 0, okazu: 0, total: 0, names: [] }));
+    lines.push(_formatGroupLine('本社工場', bg['本社工場'] || { bento: 0, okazu: 0, total: 0, names: [] }));
+    lines.push('');
+    lines.push('▼ 全体合計：' + current.grandTotal.total + '名（弁当' + current.grandTotal.bento + ' + おかずのみ' + current.grandTotal.okazu + '）');
+    lines.push('');
+    lines.push('━━━━━━━━━━━━━━━━━━━━');
+    lines.push('【最終 手配者名一覧】');
+    lines.push('━━━━━━━━━━━━━━━━━━━━');
+    current.groupOrder.forEach(function(g) {
+      var d = current.byGroup[g];
+      lines.push('■ ' + g + ':');
+      lines.push('　' + (d.names.length === 0 ? '（なし）' : d.names.join('、')));
+    });
+    lines.push('');
+    lines.push('※ 本メールは出勤土曜の前日15時の締切後に変更があった場合のみ送信されます。');
+    lines.push('※ このメールはお弁当予約アプリより自動送信されています。');
+    return lines.join('\n');
+  }
+
+  /**
+   * 出勤土曜の前日15時に呼ばれる追加変更メール送信
+   * - 翌日が出勤土曜でなければ何もしない
+   * - スナップショットと現在を比較し、差分があるときだけメール送信
+   */
+  function sendSaturdaySupplementalMail() {
+    try {
+      var today = formatDateYmd(new Date());
+      var satDate = _nextDayIfWorkSat(today);
+      if (!satDate) {
+        Logger.log('Saturday supplemental: tomorrow is not a work Saturday, skip');
+        return;
+      }
+      var snapshot = _getSatSnapshot(satDate);
+      var current = ReportService.generateReportSummary(satDate);
+      var diff = _diffSatSummary(snapshot, current);
+      if (diff.added.length === 0 && diff.removed.length === 0 && diff.changed.length === 0) {
+        Logger.log('Saturday supplemental: no diff for ' + satDate + ', skip');
+        _clearSatSnapshot(satDate);
+        return;
+      }
+      var recipients = SheetService.getMailRecipients();
+      if (!recipients || recipients.length === 0) {
+        Logger.log('Saturday supplemental: no recipients');
+        return;
+      }
+      var satD = new Date(satDate + 'T00:00:00+09:00');
+      var subject = '【お弁当注文表・追加変更】明日（出勤土曜 ' + Utilities.formatDate(satD, 'Asia/Tokyo', 'MM月dd日') + '）分の最終確定';
+      var body = _buildSatSupplementalBody(satDate, current, diff);
+      recipients.forEach(function(to) {
+        try {
+          MailApp.sendEmail(to, subject, body);
+          Logger.log('Saturday supplemental sent to: ' + to);
+        } catch (e) {
+          Logger.log('Saturday supplemental send failed to ' + to + ': ' + e.message);
+        }
+      });
+      _clearSatSnapshot(satDate);
+    } catch (err) {
+      Logger.log('sendSaturdaySupplementalMail error: ' + err.message);
+      throw err;
+    }
+  }
+
+  /**
    * 日次レポートメール送信
+   * - 翌日が出勤土曜の場合は、翌日分の暫定集計を本文に併記しスナップショット保存
    */
   function sendDailyReport() {
     try {
@@ -83,6 +292,15 @@ var MailService = (function() {
         return;
       }
 
+      // 翌日が出勤土曜なら、翌日分も生成して本文に併記＋スナップショット保存
+      var satDate = _nextDayIfWorkSat(today);
+      var satSummary = null;
+      if (satDate) {
+        satSummary = ReportService.generateReportSummary(satDate);
+        _saveSatSnapshot(satDate, satSummary);
+        Logger.log('Saturday snapshot saved for ' + satDate);
+      }
+
       var ss = ReportService.getOrCreateAdminSpreadsheet();
       var blob = null;
       try {
@@ -92,8 +310,9 @@ var MailService = (function() {
       }
 
       var dLabel = Utilities.formatDate(new Date(today + 'T00:00:00+09:00'), 'Asia/Tokyo', 'yyyy年MM月dd日');
-      var subject = '【お弁当注文表】本日分のお弁当注文一覧（' + dLabel + '）';
-      var body = buildMailBody(summary);
+      var subject = '【お弁当注文表】本日分のお弁当注文一覧（' + dLabel + '）'
+                  + (satSummary ? ' ＋翌出勤土曜分（暫定）' : '');
+      var body = buildMailBody(summary, satSummary);
 
       var options = {};
       if (blob) options.attachments = [blob];
@@ -114,6 +333,7 @@ var MailService = (function() {
 
   return {
     sendDailyReport: sendDailyReport,
+    sendSaturdaySupplementalMail: sendSaturdaySupplementalMail,
     exportSpreadsheetAsExcel: exportSpreadsheetAsExcel,
     buildMailBody: buildMailBody
   };
@@ -128,6 +348,19 @@ function dailyReportJob() {
     MailService.sendDailyReport();
   } catch (err) {
     Logger.log('dailyReportJob error: ' + err.message);
+  }
+}
+
+/**
+ * トリガーから呼ばれる出勤土曜の前日15:00ジョブ
+ * - 翌日が出勤土曜のときだけ動作
+ * - 朝メール時のスナップショットと差分があれば追加変更メールを送信
+ */
+function saturdayDeadlineMailJob() {
+  try {
+    MailService.sendSaturdaySupplementalMail();
+  } catch (err) {
+    Logger.log('saturdayDeadlineMailJob error: ' + err.message);
   }
 }
 

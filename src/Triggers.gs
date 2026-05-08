@@ -25,6 +25,14 @@ function setupTriggers() {
     .inTimezone('Asia/Tokyo')
     .create();
 
+  // 毎週金曜15時台: 翌日が出勤土曜なら追加変更分のみ送信（差分があるときだけ）
+  ScriptApp.newTrigger('saturdayDeadlineMailJob')
+    .timeBased()
+    .onWeekDay(ScriptApp.WeekDay.FRIDAY)
+    .atHour(15)
+    .inTimezone('Asia/Tokyo')
+    .create();
+
   // 3時間ごと: 管理シート更新（予約変更の反映用、負荷軽減のため3時間間隔）
   // ※ everyHours(N) はタイムゾーンに依存しない（appsscript.jsonのAsia/Tokyo設定で実行）
   ScriptApp.newTrigger('updateAdminSheetsForToday')
