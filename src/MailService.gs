@@ -335,7 +335,9 @@ var MailService = (function() {
     sendDailyReport: sendDailyReport,
     sendSaturdaySupplementalMail: sendSaturdaySupplementalMail,
     exportSpreadsheetAsExcel: exportSpreadsheetAsExcel,
-    buildMailBody: buildMailBody
+    buildMailBody: buildMailBody,
+    diffSatSummary: _diffSatSummary,
+    buildSatSupplementalBody: _buildSatSupplementalBody
   };
 })();
 
@@ -362,6 +364,87 @@ function saturdayDeadlineMailJob() {
   } catch (err) {
     Logger.log('saturdayDeadlineMailJob error: ' + err.message);
   }
+}
+
+/**
+ * サンプル: 出勤土曜の前日15時の追加変更メール（架空の差分データで送信）
+ * - 朝メール時のスナップショット（17名）と、15時時点の最終確定（20名）を架空生成
+ * - 追加4件 / 取消1件 / 種別変更1件 を含む差分を生成し、SAMPLE_MAIL_TO 全員に送信
+ */
+function sendSampleSaturdaySupplementalMail() {
+  var today = formatDateYmd(new Date());
+  var d = new Date(today + 'T00:00:00+09:00');
+  d.setDate(d.getDate() + 1);
+  var satDate = formatDateYmd(d);
+
+  // 朝9時時点のスナップショット
+  var snapshot = _buildSatSampleSummary(satDate,
+    ['田村 修二', '佐藤 健', '鈴木 一郎', '高橋 美咲', '伊藤 大輔', '渡辺 真理', '山本 剛', '中村 結衣'],
+    ['橋本 一夫', '石川 幸子'],
+    ['後藤 雄一', '長谷川 涼', '村上 理恵', '近藤 雅人', '坂本 葵', '遠藤 健一'],
+    ['竹内 大']
+  );
+
+  // 15時時点の最終確定（朝から変更あり）
+  // - 追加: 小林 光（弁当）, 加藤 智子（弁当）, 前田 翔太（おかず）, 金子 由佳（おかず）
+  // - 取消: 遠藤 健一（弁当）
+  // - 種別変更: 山本 剛 弁当→おかず
+  var current = _buildSatSampleSummary(satDate,
+    ['田村 修二', '佐藤 健', '鈴木 一郎', '高橋 美咲', '伊藤 大輔', '渡辺 真理', '中村 結衣', '小林 光', '加藤 智子'],
+    ['橋本 一夫', '石川 幸子', '前田 翔太', '山本 剛'],
+    ['後藤 雄一', '長谷川 涼', '村上 理恵', '近藤 雅人', '坂本 葵'],
+    ['竹内 大', '金子 由佳']
+  );
+
+  var diff = MailService.diffSatSummary(snapshot, current);
+  var satLabel = Utilities.formatDate(d, 'Asia/Tokyo', 'MM月dd日');
+  var subject = '[サンプル]【お弁当注文表・追加変更】明日（出勤土曜 ' + satLabel + '）分の最終確定';
+  var body = '※ これはサンプルメールです。架空の差分データ（追加' + diff.added.length
+           + '件・取消' + diff.removed.length + '件・種別変更' + diff.changed.length + '件）で生成しています。\n\n'
+           + MailService.buildSatSupplementalBody(satDate, current, diff);
+
+  SAMPLE_MAIL_TO.forEach(function(to) {
+    try {
+      MailApp.sendEmail(to, subject, body);
+      Logger.log('Sample supplemental mail sent to: ' + to);
+    } catch (e) {
+      Logger.log('Sample supplemental send failed to ' + to + ': ' + e.message);
+    }
+  });
+}
+
+/**
+ * サンプル土曜分の集計データを生成
+ */
+function _buildSatSampleSummary(dateStr, shinB, shinO, honB, honO) {
+  function _names(b, o) {
+    return b.map(function(n) { return n + '（弁当）'; })
+            .concat(o.map(function(n) { return n + '（おかずのみ）'; }));
+  }
+  var byGroup = {
+    '新工場': {
+      bento: shinB.length,
+      okazu: shinO.length,
+      total: shinB.length + shinO.length,
+      names: _names(shinB, shinO)
+    },
+    '本社工場': {
+      bento: honB.length,
+      okazu: honO.length,
+      total: honB.length + honO.length,
+      names: _names(honB, honO)
+    }
+  };
+  return {
+    date: dateStr,
+    byGroup: byGroup,
+    grandTotal: {
+      bento: byGroup['新工場'].bento + byGroup['本社工場'].bento,
+      okazu: byGroup['新工場'].okazu + byGroup['本社工場'].okazu,
+      total: byGroup['新工場'].total + byGroup['本社工場'].total
+    },
+    groupOrder: ['新工場', '本社工場']
+  };
 }
 
 /**
