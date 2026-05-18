@@ -104,6 +104,25 @@ var ReportService = (function() {
   }
 
   /**
+   * 同一作業員コードの行を1行に絞る（マスタの部署重複登録への対策）
+   * マスタDBに「1人が複数部署」のレコードがあると、レポート生成時に
+   * 同じ予約が2行に展開されて発注が二重になるので、レポート用途では
+   * 作業員コード単位で先頭行のみ採用する。マスタDBは変更しない。
+   */
+  function _uniqueWorkersByCode(workers) {
+    var seen = {};
+    var result = [];
+    for (var i = 0; i < workers.length; i++) {
+      var code = workers[i].code;
+      if (!code) continue;
+      if (seen[code]) continue;
+      seen[code] = true;
+      result.push(workers[i]);
+    }
+    return result;
+  }
+
+  /**
    * 拠点でグループ分け（事務所/工場の区別なし、拠点のみで集計）
    */
   function _getGroupKey(location) {
@@ -123,7 +142,7 @@ var ReportService = (function() {
     if (!range) return;
 
     var ss = getOrCreateAdminSpreadsheet(monthKey);
-    var workers = SheetService.getWorkers();
+    var workers = _uniqueWorkersByCode(SheetService.getWorkers());
     var workersMap = {};
     workers.forEach(function(w) { workersMap[w.code] = w; });
     var reservations = SheetService.getReservationsInRange(range.from, range.to);
@@ -313,7 +332,7 @@ var ReportService = (function() {
    */
   function generateReportSummary(dateStr) {
     if (!dateStr) dateStr = formatDateYmd(new Date());
-    var workers = SheetService.getWorkers();
+    var workers = _uniqueWorkersByCode(SheetService.getWorkers());
     var workersMap = {};
     workers.forEach(function(w) { workersMap[w.code] = w; });
     var reservations = SheetService.getReservationsInRange(dateStr, dateStr);
