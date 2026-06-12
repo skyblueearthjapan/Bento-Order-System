@@ -206,7 +206,16 @@
       });
       if (ng.length > 0) {
         console.error('Partial save failure:', ng);
-        updateSaveStatus('error');
+        // 恒久的に失敗する変更（過去日・締切超過など）はキューと下書きから除去し、無限リトライを防ぐ
+        ChangeQueue.clearSaved(ng);
+        if (state.currentUser) {
+          var lockedDates = ng.filter(function(r) { return isDateLocked(r.date); })
+                              .map(function(r) { return r.date; });
+          if (lockedDates.length > 0) DraftStore.clearDates(state.currentUser.code, lockedDates);
+        }
+        // 失敗が全て恒久的（古い下書きの掃除）なら、ユーザー操作の結果ではないためエラー表示しない
+        var allLocked = ng.every(function(r) { return isDateLocked(r.date); });
+        updateSaveStatus(allLocked ? 'saved' : 'error');
       } else {
         updateSaveStatus('saved');
       }
@@ -402,7 +411,15 @@
   function recoverDraftForUser(worker) {
     var draft = DraftStore.load(worker.code);
     if (!draft) return;
-    var dates = Object.keys(draft);
+    var allDates = Object.keys(draft);
+    if (allDates.length === 0) return;
+    // 保存が永久に失敗する下書き（過去日・締切超過）は復元せず破棄し、再送ループを防ぐ
+    var locked = allDates.filter(isDateLocked);
+    if (locked.length > 0) {
+      DraftStore.clearDates(worker.code, locked);
+      console.info('Purged unsavable drafts: ' + locked.length + ' dates');
+    }
+    var dates = allDates.filter(function(date) { return !isDateLocked(date); });
     if (dates.length === 0) return;
     console.info('Recovering draft: ' + dates.length + ' dates');
     dates.forEach(function(date) {
@@ -658,6 +675,17 @@
     limit.setDate(limit.getDate() + RESERVATION_WINDOW_DAYS);
     var target = new Date(dateStr + 'T00:00:00+09:00');
     return target > limit;
+  }
+
+  // 保存が恒久的に失敗する日付か（過去日・当日締切超過・出勤土曜締切超過）
+  // セル編集可否（renderCalendar）と同一基準。下書き復元・失敗処理の判定に使う
+  function isDateLocked(dateStr) {
+    var calEntry = state.calendarMap[dateStr];
+    var isWorkSat = calEntry && calEntry.type === '出勤土曜';
+    if (dateStr < state.todayStr) return true;
+    if (dateStr === state.todayStr && isPastTodayDeadline()) return true;
+    if (isWorkSat && isPastSatDeadline(dateStr)) return true;
+    return false;
   }
 
   // ===== 集計描画 =====
