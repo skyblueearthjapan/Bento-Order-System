@@ -17,15 +17,15 @@ function setupTriggers() {
     .inTimezone('Asia/Tokyo')
     .create();
 
-  // 毎日9時台: 日次レポート（集計 + メール送信）
+  // 毎日8時台: 日次レポート（集計 + メール送信）。当日締切8:00直後に本日分＋翌出勤土曜分（暫定）を送信
   ScriptApp.newTrigger('dailyReportJob')
     .timeBased()
-    .atHour(9)
+    .atHour(8)
     .everyDays(1)
     .inTimezone('Asia/Tokyo')
     .create();
 
-  // 毎週金曜15時台: 翌日が出勤土曜なら追加変更分のみ送信（差分があるときだけ）
+  // 毎週金曜15時台: 翌日が出勤土曜なら最終確定メールを送信（変更の有無に関わらず必ず送信）
   ScriptApp.newTrigger('saturdayDeadlineMailJob')
     .timeBased()
     .onWeekDay(ScriptApp.WeekDay.FRIDAY)

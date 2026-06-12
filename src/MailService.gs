@@ -190,12 +190,17 @@ var MailService = (function() {
     var satD = new Date(satDateStr + 'T00:00:00+09:00');
     var satLabel = Utilities.formatDate(satD, 'Asia/Tokyo', 'yyyy年MM月dd日');
     var timeStr = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'HH:mm');
+    var hasChanges = !(diff.added.length === 0 && diff.removed.length === 0 && diff.changed.length === 0);
     var lines = [];
     lines.push('総務ご担当者様');
     lines.push('');
     lines.push('お疲れ様です。');
     lines.push('本日朝のメールでお知らせした明日（' + satLabel + '・出勤土曜）分の');
-    lines.push('お弁当注文に変更がありました。最終確定状況をご連絡いたします。');
+    if (hasChanges) {
+      lines.push('お弁当注文に変更がありました。最終確定状況をご連絡いたします。');
+    } else {
+      lines.push('お弁当注文に変更はありませんでした。最終確定状況をご連絡いたします。');
+    }
     lines.push('');
     lines.push('■ 対象日: ' + satLabel);
     lines.push('■ 締切時刻: 本日15:00');
@@ -229,15 +234,15 @@ var MailService = (function() {
       lines.push('　' + (d.names.length === 0 ? '（なし）' : d.names.join('、')));
     });
     lines.push('');
-    lines.push('※ 本メールは出勤土曜の前日15時の締切後に変更があった場合のみ送信されます。');
+    lines.push('※ 本メールは出勤土曜の前日15時の締切時点で、変更の有無に関わらず送信されます。');
     lines.push('※ このメールはお弁当予約アプリより自動送信されています。');
     return lines.join('\n');
   }
 
   /**
-   * 出勤土曜の前日15時に呼ばれる追加変更メール送信
+   * 出勤土曜の前日15時に呼ばれる最終確定メール送信
    * - 翌日が出勤土曜でなければ何もしない
-   * - スナップショットと現在を比較し、差分があるときだけメール送信
+   * - スナップショットと現在を比較し、変更の有無に関わらず必ず送信（件名・本文で有無を明示）
    */
   function sendSaturdaySupplementalMail() {
     try {
@@ -250,18 +255,16 @@ var MailService = (function() {
       var snapshot = _getSatSnapshot(satDate);
       var current = ReportService.generateReportSummary(satDate);
       var diff = _diffSatSummary(snapshot, current);
-      if (diff.added.length === 0 && diff.removed.length === 0 && diff.changed.length === 0) {
-        Logger.log('Saturday supplemental: no diff for ' + satDate + ', skip');
-        _clearSatSnapshot(satDate);
-        return;
-      }
+      var hasChanges = !(diff.added.length === 0 && diff.removed.length === 0 && diff.changed.length === 0);
+      // 変更の有無に関わらず必ず送信する（変更があれば総務がお弁当屋へ追加電話するため、有無を必ず通知）
+      Logger.log('Saturday supplemental: ' + satDate + ' hasChanges=' + hasChanges);
       var recipients = SheetService.getMailRecipients();
       if (!recipients || recipients.length === 0) {
         Logger.log('Saturday supplemental: no recipients');
         return;
       }
       var satD = new Date(satDate + 'T00:00:00+09:00');
-      var subject = '【お弁当注文表・追加変更】明日（出勤土曜 ' + Utilities.formatDate(satD, 'Asia/Tokyo', 'MM月dd日') + '）分の最終確定';
+      var subject = '【お弁当注文表・' + (hasChanges ? '追加変更' : '変更なし') + '】明日（出勤土曜 ' + Utilities.formatDate(satD, 'Asia/Tokyo', 'MM月dd日') + '）分の最終確定';
       var body = _buildSatSupplementalBody(satDate, current, diff);
 
       // 添付: 最終確定後の土曜分Excel
@@ -377,7 +380,7 @@ function dailyReportJob() {
 /**
  * トリガーから呼ばれる出勤土曜の前日15:00ジョブ
  * - 翌日が出勤土曜のときだけ動作
- * - 朝メール時のスナップショットと差分があれば追加変更メールを送信
+ * - 朝メール時のスナップショットと比較し、変更の有無に関わらず最終確定メールを送信
  */
 function saturdayDeadlineMailJob() {
   try {

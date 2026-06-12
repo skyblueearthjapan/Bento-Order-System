@@ -32,9 +32,9 @@ var Validation = (function() {
     if (change.date < today) {
       return { valid: false, message: '過去の日付は変更できません' };
     }
-    // 当日分は9時以降は変更不可
+    // 当日分は8時以降は変更不可
     if (change.date === today && now.getHours() >= RULES.DEADLINE_HOUR) {
-      return { valid: false, message: '当日分の締切(AM9:00)を過ぎています' };
+      return { valid: false, message: '当日分の締切(AM8:00)を過ぎています' };
     }
     // 出勤土曜分は前日金曜15時以降は変更不可
     try {
@@ -44,10 +44,10 @@ var Validation = (function() {
         friD.setDate(friD.getDate() - 1);
         var friStr = formatDateYmd(friD);
         if (today > friStr) {
-          return { valid: false, message: '出勤土曜分の締切(金曜15:00)を過ぎています' };
+          return { valid: false, message: '出勤土曜分の締切(前日金曜15:00)を過ぎています' };
         }
         if (today === friStr && now.getHours() >= RULES.SATURDAY_DEADLINE_HOUR) {
-          return { valid: false, message: '出勤土曜分の締切(金曜15:00)を過ぎています' };
+          return { valid: false, message: '出勤土曜分の締切(前日金曜15:00)を過ぎています' };
         }
       }
     } catch (e) {

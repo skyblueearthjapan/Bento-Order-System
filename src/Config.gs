@@ -89,9 +89,9 @@ var STAFF_TYPE = {
 
 // ===== 業務ルール =====
 var RULES = {
-  DEADLINE_HOUR: 9,              // 当日締切 9:00
+  DEADLINE_HOUR: 8,              // 当日締切 8:00
   DEADLINE_MINUTE: 0,
-  SATURDAY_DEADLINE_HOUR: 15,    // 出勤土曜の締切（金曜）15:00
+  SATURDAY_DEADLINE_HOUR: 15,    // 出勤土曜の締切（前日金曜）15:00
   SATURDAY_DEADLINE_MINUTE: 0,
   RESERVATION_WINDOW_DAYS: 14,   // 予約可能期間: 本日から2週間
   MONTH_START_DAY: 16            // 月度開始日: 16日
