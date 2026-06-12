@@ -33,11 +33,12 @@ function setupTriggers() {
     .inTimezone('Asia/Tokyo')
     .create();
 
-  // 3時間ごと: 管理シート更新（予約変更の反映用、負荷軽減のため3時間間隔）
+  // 4時間ごと: 管理シート更新（予約変更の反映用、負荷軽減のため4時間間隔）
+  // ※ everyHours(N) の有効値は 1/2/4/6/8/12 のみ。3は無効で毎時実行にフォールバックするため4を使用
   // ※ everyHours(N) はタイムゾーンに依存しない（appsscript.jsonのAsia/Tokyo設定で実行）
   ScriptApp.newTrigger('updateAdminSheetsForToday')
     .timeBased()
-    .everyHours(3)
+    .everyHours(4)
     .create();
 
   Logger.log('Triggers set up successfully');
