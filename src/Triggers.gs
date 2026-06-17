@@ -17,10 +17,12 @@ function setupTriggers() {
     .inTimezone('Asia/Tokyo')
     .create();
 
-  // 毎日8時台: 日次レポート（集計 + メール送信）。当日締切8:00直後に本日分＋翌出勤土曜分（暫定）を送信
+  // 毎日8:00〜8:30台: 日次レポート（集計 + メール送信）。当日締切8:00直後に本日分＋翌出勤土曜分（暫定）を送信
+  // ※ nearMinute(15) で 8:15±15分（=8:00〜8:30）の枠に発火を限定。お弁当屋さんの電話時刻と被らないよう8:30までに送信
   ScriptApp.newTrigger('dailyReportJob')
     .timeBased()
     .atHour(8)
+    .nearMinute(15)
     .everyDays(1)
     .inTimezone('Asia/Tokyo')
     .create();
