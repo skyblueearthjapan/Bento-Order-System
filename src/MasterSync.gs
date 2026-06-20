@@ -34,12 +34,7 @@ var MasterSync = (function() {
     }
     var values = src.getRange(2, 1, lastRow - 1, lastCol).getValues();
     var rows = values
-      // 対象は「新工場の事務所スタッフ」のみ（拠点=新工場 かつ スタッフ種類=事務所）
-      .filter(function(r) {
-        if (!r[0]) return false;
-        return String(r[4] || '').trim() === LOCATION.SHIN
-          && String(r[5] || '').trim() === STAFF_TYPE.OFFICE;
-      })
+      .filter(function(r) { return r[0]; })
       .map(function(r) {
         return [
           String(r[0]).trim(),  // 作業員コード
