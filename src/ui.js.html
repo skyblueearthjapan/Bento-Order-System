@@ -335,6 +335,12 @@
   }
 
   // ===== インクリメンタルサーチ =====
+  // 名前中の空白（半角・全角）を無視して照合する。
+  // データ側の名前に含まれるスペースと入力のスペースが一致しなくてもヒットさせる。
+  function normalizeName(s) {
+    return String(s).replace(/[\s　]/g, '');
+  }
+
   function setupSearch() {
     var input = document.getElementById('name-search');
     var dropdown = document.getElementById('searchDropdown');
@@ -343,8 +349,9 @@
       var q = this.value.trim();
       dropdown.innerHTML = '';
       if (!q) { dropdown.classList.remove('active'); return; }
+      var qn = normalizeName(q);
       var matches = state.workers.filter(function(w) {
-        return w.name.indexOf(q) !== -1 || (w.code && w.code.indexOf(q) === 0);
+        return normalizeName(w.name).indexOf(qn) !== -1 || (w.code && w.code.indexOf(q) === 0);
       });
       if (matches.length === 0) { dropdown.classList.remove('active'); return; }
       matches.slice(0, 20).forEach(function(w) {
@@ -364,8 +371,9 @@
     input.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' && this.value.trim()) {
         var q = this.value.trim();
-        var match = state.workers.filter(function(w) { return w.name === q; })[0];
-        if (!match) match = state.workers.filter(function(w) { return w.name.indexOf(q) !== -1; })[0];
+        var qn = normalizeName(q);
+        var match = state.workers.filter(function(w) { return normalizeName(w.name) === qn; })[0];
+        if (!match) match = state.workers.filter(function(w) { return normalizeName(w.name).indexOf(qn) !== -1; })[0];
         if (match) {
           dropdown.classList.remove('active');
           openCalendarByCode(match.code);
