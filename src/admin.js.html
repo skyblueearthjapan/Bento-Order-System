@@ -165,30 +165,107 @@
     }).join('') : '<tr><td colspan="8" style="color:#a09080">特弁の予定はありません。</td></tr>';
   }
 
-  function renderTimeline() {
+  // ===== 受付カレンダー（月めくり・期間は日付をまたぐ帯で表示） =====
+  var calOffset = 0;   // 今月から何か月ずらして表示しているか
+
+  function ymOf(offset) {
     var t = dObj(D.today);
-    var y = t.getUTCFullYear(), m = t.getUTCMonth();
-    var first = y + '-' + ('0' + (m + 1)).slice(-2) + '-01';
-    var days = [];
-    for (var ds = first; days.length < 62; ds = addDays(ds, 1)) {
-      var mm = dObj(ds).getUTCMonth();
-      if (mm !== m && mm !== (m + 1) % 12) break;
-      days.push(ds);
-    }
-    var h = '<div class="timeline" style="--n:' + days.length + '"><div></div>';
-    days.forEach(function(ds) {
-      var w = dow(ds), d = dObj(ds).getUTCDate();
-      h += '<div class="tl-h' + (w === 0 ? ' sun' : w === 6 ? ' sat' : '') + '">' + (d === 1 ? (dObj(ds).getUTCMonth() + 1) + '/' : '') + d + '</div>';
-    });
-    EARLY_KEYS.forEach(function(k) {
-      h += '<div class="tl-lab">' + esc(label(k)) + '</div>';
-      days.forEach(function(ds) {
-        var cls = isHoliday(ds) ? 'hol' : offered(k, ds) ? k : '';
-        h += '<div class="tl-c ' + cls + (ds === D.today ? ' today' : '') + '" title="' + md(ds) + '"></div>';
-      });
-    });
-    $('timeline').innerHTML = h + '</div>';
+    var y = t.getUTCFullYear(), m = t.getUTCMonth() + offset;
+    y += Math.floor(m / 12); m = ((m % 12) + 12) % 12;
+    return { y: y, m: m };   // m: 0-11
   }
+  function monthDays(y, m) {
+    var first = y + '-' + ('0' + (m + 1)).slice(-2) + '-01';
+    var out = [];
+    for (var ds = first; dObj(ds).getUTCMonth() === m; ds = addDays(ds, 1)) out.push(ds);
+    return out;
+  }
+  /** その日に重なっている期間（有効なもの）を1件返す */
+  function periodAt(menu, ds) {
+    return D.periods.filter(function(p) { return p.active && p.menu === menu && p.from <= ds && ds <= p.to; })[0] || null;
+  }
+
+  function renderTimeline() {
+    var a = ymOf(calOffset), b = ymOf(calOffset + 1);
+    var h = '<div class="rc-nav">' +
+      '<button type="button" class="rc-navbtn" data-calmove="-1" aria-label="前の月">◀</button>' +
+      '<div class="rc-navtitle">' + a.y + '年' + (a.m + 1) + '月 ・ ' + (b.y !== a.y ? b.y + '年' : '') + (b.m + 1) + '月</div>' +
+      '<button type="button" class="rc-navbtn" data-calmove="1" aria-label="次の月">▶</button>' +
+      (calOffset !== 0 ? '<button type="button" class="btn sm" data-calmove="0">今月へ</button>' : '') +
+      '</div>';
+    h += '<div class="rc-months">' + renderMonth(a.y, a.m) + renderMonth(b.y, b.m) + '</div>';
+    h += '<div class="rc-legend">' +
+      '<span><i class="lg-bar men"></i>' + icon('men', 18) + '麺の受付期間</span>' +
+      '<span><i class="lg-bar don"></i>' + icon('don', 18) + '丼の受付期間</span>' +
+      '<span><i class="lg-toku">★</i>' + icon('toku', 18) + '特弁</span>' +
+      '<span><i class="lg-hol"></i>休日</span>' +
+      '<span><i class="lg-today"></i>今日</span>' +
+      '<span><i class="lg-wsat">出勤</i>出勤土曜</span>' +
+      '<span class="rc-hint">帯や★を押すと、その設定を編集できます</span>' +
+      '</div>';
+    $('timeline').innerHTML = h;
+  }
+
+  function renderMonth(y, m) {
+    var days = monthDays(y, m);
+    var h = '<div class="rc-month"><div class="rc-mtitle"><span class="rc-mnum">' + (m + 1) + '</span>月<small>' + y + '</small></div>';
+    h += '<div class="rc-grid">';
+    WD.forEach(function(w, i) { h += '<div class="rc-wd' + (i === 0 ? ' sun' : i === 6 ? ' sat' : '') + '">' + w + '</div>'; });
+    for (var i = 0; i < dow(days[0]); i++) h += '<div class="rc-day blank"></div>';
+    days.forEach(function(ds) { h += renderDay(ds); });
+    h += '</div></div>';
+    return h;
+  }
+
+  function renderDay(ds) {
+    var w = dow(ds), d = dObj(ds).getUTCDate();
+    var hol = isHoliday(ds), wsat = isWorkSat(ds), c = calMap[ds];
+    var hasLabel = !hol && ['men', 'don'].some(function(k) {
+      var p = periodAt(k, ds);
+      return p && (ds === p.from || w === 0 || dObj(ds).getUTCDate() === 1);
+    });
+    var cls = 'rc-day' + (hol ? ' hol' : '') + (ds < D.today ? ' past' : '') + (ds === D.today ? ' today' : '') + (wsat ? ' wsat' : '') + (hasLabel ? ' has-label' : '');
+    var tips = [md(ds)];
+    var h = '<div class="' + cls + '">';
+    h += '<div class="rc-top"><span class="rc-num' + (w === 0 ? ' sun' : w === 6 ? ' sat' : '') + '">' + d + '</span>';
+    if (wsat) h += '<span class="rc-tag">出勤</span>';
+    else if (c && c.type === '祝日') h += '<span class="rc-holname">' + esc(c.note || '祝日') + '</span>';
+    h += '</div><div class="rc-lanes">';
+    ['men', 'don'].forEach(function(k) {
+      var p = periodAt(k, ds);
+      if (!p) { h += '<span class="rc-bar none"></span>'; return; }
+      var capL = ds === p.from, capR = ds === p.to;               // 期間の両端だけ丸める
+      var weekHead = w === 0 || d === 1;                           // 週・月の頭でもメニュー名を出す
+      var name = label(k) + (p.name ? '：' + p.name : '');
+      var text = hol ? '' : (capL ? name : (weekHead ? label(k) : ''));
+      // 名前を伸ばせる日数: その週の土曜・期間の終わり・月末のうち早いところまで
+      var span = 1;
+      for (var x = addDays(ds, 1); span < 7 - w && x <= p.to && dObj(x).getUTCMonth() === dObj(ds).getUTCMonth(); x = addDays(x, 1)) span++;
+      if (!hol) tips.push(name);
+      h += '<button type="button" class="rc-bar ' + k + (capL ? ' cap-l' : '') + (capR ? ' cap-r' : '') + (hol ? ' off' : '') + '"' +
+        ' style="--span:' + span + '"' +
+        ' data-pedit="' + esc(p.id) + '" title="' + esc(name + '（' + mds(p.from) + '〜' + mds(p.to) + '）') + '">' +
+        (text ? '<span>' + esc(text) + '</span>' : '') + '</button>';
+    });
+    h += '</div>';
+    var t = D.tokus.filter(function(x) { return x.active && x.date === ds; })[0];
+    if (t) {
+      tips.push('特弁：' + t.name + ' ¥' + t.price);
+      h += '<button type="button" class="rc-toku" data-tedit="' + esc(t.id) + '" title="' + esc('特弁：' + t.name + ' ¥' + t.price + '（締切 ' + dlText(ds) + '）') + '">' +
+        icon('toku', 16) + '<span>特弁 ¥' + esc(t.price) + '</span></button>';
+    }
+    if (!hol && EARLY_KEYS.some(function(k) { return offered(k, ds); })) tips.push('締切 ' + dlText(ds));
+    h += '</div>';
+    return h.replace('<div class="' + cls + '">', '<div class="' + cls + '" title="' + esc(tips.join('\n')) + '">');
+  }
+
+  document.addEventListener('click', function(e) {
+    var b = e.target.closest ? e.target.closest('[data-calmove]') : null;
+    if (!b) return;
+    var v = Number(b.getAttribute('data-calmove'));
+    calOffset = v === 0 ? 0 : calOffset + v;
+    renderTimeline();
+  });
 
   function renderLog() {
     $('logTbody').innerHTML = (D.log || []).map(function(a) {

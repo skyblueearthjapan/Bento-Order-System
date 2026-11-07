@@ -151,7 +151,7 @@
   .cal-weekday.sun { color: #d05050; }
   .cal-weekday.sat { color: #4080c0; }
 
-  .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+  .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
 
   /* 各日付セル */
   .cal-cell {
@@ -304,7 +304,25 @@
   .cal-cell.toku-day { box-shadow: inset 0 0 0 2px #f2c94c; }
   .cal-cell.menu-locked { cursor: not-allowed; }
   .cal-cell.menu-locked::after { content: '🔒'; position: absolute; bottom: 2px; left: 4px; font-size: 9px; opacity: 0.8; }
-  .cal-cell .order-label { text-align: center; line-height: 1.2; }
+  .cal-cell .order-label { text-align: center; line-height: 1.2; display: flex; flex-direction: column; align-items: center; gap: 1px; }
+
+  /* 注文の札（メニュー名を大きく・色で区別し、金額を添える） */
+  .ol-name { display: inline-block; font-size: 12.5px; font-weight: 700; color: #fff; border-radius: 6px; padding: 1px 7px; letter-spacing: 0.5px; white-space: nowrap; box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
+  .ol-price { font-size: 10.5px; font-weight: 700; white-space: nowrap; }
+  .ol-short { display: none; }
+  .cal-cell.bento .ol-name { background: #d9822b; }
+  .cal-cell.bento .ol-price { color: #a85f12; }
+  .cal-cell.okazu .ol-name { background: #3f9a52; }
+  .cal-cell.okazu .ol-price { color: #2f7a3e; }
+  .cal-cell.men .ol-name { background: #4d6fb3; }
+  .cal-cell.men .ol-price { color: #33589a; }
+  .cal-cell.don .ol-name { background: #b34848; }
+  .cal-cell.don .ol-price { color: #a03030; }
+  .cal-cell.toku .ol-name { background: linear-gradient(135deg, #d4a017, #b8860b); }
+  .cal-cell.toku .ol-price { color: #8a5a00; }
+  .cal-cell.bento .order-icon .mi-cell, .cal-cell.okazu .order-icon .mi-cell,
+  .cal-cell.men .order-icon .mi-cell, .cal-cell.don .order-icon .mi-cell, .cal-cell.toku .order-icon .mi-cell { width: 30px; height: 30px; }
+  .cal-cell.disabled .ol-name { background: #8a8070 !important; }
   .menu-chips { position: absolute; top: 3px; right: 3px; display: flex; gap: 2px; }
   .mchip { font-size: 9px; font-weight: 700; border-radius: 3px; padding: 0 3px; line-height: 14px; }
   .mchip.men { background: #e4ebf8; color: #33589a; border: 1px solid #9fb4dc; }
@@ -351,6 +369,15 @@
     .cal-summary { flex-direction: column; align-items: center; gap: 6px; }
     .cal-grid { gap: 2px; }
     .cal-cell { min-height: 44px; border-radius: 6px; }
+    .cal-cell:not(.empty-cell) { aspect-ratio: auto; min-height: 70px; padding-bottom: 12px; }
+    /* 受付日マークは小さな色の丸にして、日付の数字にかぶらないようにする */
+    .menu-chips { top: 5px; right: 4px; gap: 2px; }
+    .mchip { font-size: 0; width: 7px; height: 7px; padding: 0; border-radius: 50%; line-height: 0; }
+    .mchip.men { background: #4d6fb3; } .mchip.don { background: #b34848; } .mchip.toku { background: #d4a017; }
+    .ol-full { display: none; }
+    .ol-done { display: none; }
+    .ol-short { display: inline; }
+    .location-badge { font-size: 8px; padding: 0 2px; bottom: 1px; right: 1px; }
     .cal-cell .order-icon { font-size: 20px; }
     .cal-cell .order-label { font-size: 8px; }
     .cal-cell .date-num { font-size: 9px; }
@@ -360,7 +387,11 @@
     .cal-lid-title { font-size: 15px; }
     .modal-overlay { padding: 8px; }
     .mi-cell { width: 24px; height: 24px; }
-    .mchip { font-size: 8px; padding: 0 2px; line-height: 12px; }
+    .cal-cell.bento .order-icon .mi-cell, .cal-cell.okazu .order-icon .mi-cell,
+    .cal-cell.men .order-icon .mi-cell, .cal-cell.don .order-icon .mi-cell, .cal-cell.toku .order-icon .mi-cell { width: 18px; height: 18px; }
+    .ol-name { font-size: 9.5px; padding: 0 3px; letter-spacing: 0; border-radius: 4px; }
+    .ol-price { font-size: 8.5px; }
+    .cal-cell .order-icon { margin-top: 8px; }
     .admin-btn, .portal-btn { font-size: 11px; padding: 5px 8px; }
     .ticker .tk-dots { display: none; }
     .cal-mode-bar { flex-wrap: wrap; gap: 6px; }

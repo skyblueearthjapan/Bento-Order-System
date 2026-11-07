@@ -28,13 +28,62 @@
   .statchip { border: 1px solid #e0d5c5; border-radius: 10px; padding: 8px 12px; font-size: 12px; min-width: 160px; background: #fdfaf4; }
   .statchip b { display: block; margin-bottom: 2px; }
   .fixed-rule { font-size: 12.5px; line-height: 1.8; background: #fdfaf4; border-radius: 8px; padding: 8px 12px; }
-  .timeline { display: grid; grid-template-columns: 56px repeat(var(--n), minmax(12px, 1fr)); gap: 1px; font-size: 9px; overflow-x: auto; }
-  .tl-h { text-align: center; color: #a09080; }
-  .tl-h.sun { color: #d05050; } .tl-h.sat { color: #4080c0; }
-  .tl-lab { font-size: 11px; font-weight: 700; display: flex; align-items: center; }
-  .tl-c { height: 20px; background: #f6f1e8; border-radius: 2px; }
-  .tl-c.hol { background: #e3ddd2; } .tl-c.men { background: #9fb4dc; } .tl-c.don { background: #dc9a9a; } .tl-c.toku { background: #f2c94c; }
-  .tl-c.today { outline: 2px solid #d48c20; }
+  /* ===== 受付カレンダー ===== */
+  .rc-nav { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .rc-navtitle { font-size: 15px; font-weight: 700; color: #5b4a2e; letter-spacing: 1px; min-width: 150px; text-align: center; }
+  .rc-navbtn { width: 32px; height: 32px; border-radius: 50%; border: 1.5px solid #d4c4a0; background: #fff; color: #8b6914; cursor: pointer; font-size: 12px; transition: all .15s; }
+  .rc-navbtn:hover { background: #8b6914; color: #fff; border-color: #8b6914; }
+  .rc-months { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .rc-month { background: linear-gradient(180deg, #fffdf8, #fbf6ec); border: 1px solid #ece2cf; border-radius: 14px; padding: 12px 12px 14px; box-shadow: 0 2px 10px rgba(90,60,20,.06); }
+  .rc-mtitle { display: flex; align-items: baseline; gap: 4px; color: #6e5a36; font-weight: 700; font-size: 13px; margin: 0 2px 8px; }
+  .rc-mnum { font-size: 28px; line-height: 1; letter-spacing: -1px; color: #8b6914; }
+  .rc-mtitle small { margin-left: 6px; font-weight: 400; color: #b0a088; font-size: 11px; }
+  .rc-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); column-gap: 0; row-gap: 4px; }
+  .rc-wd { text-align: center; font-size: 10.5px; font-weight: 700; color: #a09080; padding-bottom: 4px; border-bottom: 1px solid #ece2cf; margin-bottom: 2px; }
+  .rc-wd.sun { color: #d05050; } .rc-wd.sat { color: #4080c0; }
+  .rc-day { position: relative; min-height: 74px; padding: 4px 0 4px; background: #fff; border-right: 1px solid #f3ecdf; border-bottom: 1px solid #f3ecdf; display: flex; flex-direction: column; gap: 3px; }
+  .rc-day.blank { background: transparent; border-color: transparent; }
+  .rc-day.hol { background: repeating-linear-gradient(135deg, #f4f0e8, #f4f0e8 5px, #ece6da 5px, #ece6da 10px); }
+  .rc-day.past { opacity: .45; }
+  .rc-day.has-label { z-index: 3; }   /* 帯の名前が、後ろの日のマスに隠れないように */
+  .rc-day.today { box-shadow: inset 0 0 0 2px #d48c20; border-radius: 6px; z-index: 1; background: #fffaf0; }
+  .rc-top { display: flex; align-items: center; justify-content: space-between; padding: 0 5px; min-height: 16px; }
+  .rc-num { font-size: 12px; font-weight: 700; color: #6e5a36; }
+  .rc-num.sun { color: #d05050; } .rc-num.sat { color: #4080c0; }
+  .rc-day.today .rc-num { background: #d48c20; color: #fff; border-radius: 10px; padding: 0 6px; }
+  .rc-tag { font-size: 9px; font-weight: 700; color: #7a5ab0; background: #efe8fb; border: 1px solid #cdbbef; border-radius: 6px; padding: 0 4px; white-space: nowrap; }
+  .rc-holname { font-size: 9px; color: #b05050; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 70%; }
+  .rc-lanes { display: flex; flex-direction: column; gap: 3px; }
+  .rc-bar { display: block; height: 16px; border: none; padding: 0; margin: 0; font-family: inherit; font-size: 10px; font-weight: 700; color: #fff; text-align: left; overflow: visible; white-space: nowrap; cursor: pointer; position: relative; }
+  .rc-bar.none { cursor: default; background: transparent; }
+  /* 名前はその週の帯の長さ（--span 日分）まで伸ばして表示する */
+  .rc-bar span { position: absolute; left: 6px; top: 0; line-height: 16px; text-shadow: 0 1px 1px rgba(0,0,0,.25); width: calc(var(--span, 1) * 100% - 10px); overflow: hidden; text-overflow: ellipsis; z-index: 2; pointer-events: none; }
+  .rc-bar.men { background: linear-gradient(180deg, #6f8fcf, #4d6fb3); }
+  .rc-bar.don { background: linear-gradient(180deg, #d06a6a, #b34848); }
+  .rc-bar.cap-l { margin-left: 4px; border-top-left-radius: 8px; border-bottom-left-radius: 8px; }
+  .rc-bar.cap-r { margin-right: 4px; border-top-right-radius: 8px; border-bottom-right-radius: 8px; }
+  .rc-bar.off { opacity: .35; }
+  .rc-bar:not(.none):hover { filter: brightness(1.12); }
+  .rc-toku { display: flex; align-items: center; gap: 3px; margin: 0 4px; padding: 1px 4px; border: 1px solid #d4a017; border-radius: 8px; background: linear-gradient(135deg, #fff6c8, #ffe08a); font-family: inherit; font-size: 9.5px; font-weight: 700; color: #6b4300; cursor: pointer; overflow: hidden; white-space: nowrap; box-shadow: 0 1px 3px rgba(212,160,23,.35); }
+  .rc-toku span { overflow: hidden; text-overflow: ellipsis; }
+  .rc-toku:hover { filter: brightness(1.05); }
+  .rc-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin-top: 12px; padding-top: 10px; border-top: 1px dashed #e0d5c5; font-size: 11.5px; color: #6e5a36; }
+  .rc-legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .rc-legend i { display: inline-block; font-style: normal; }
+  .lg-bar { width: 26px; height: 10px; border-radius: 6px; }
+  .lg-bar.men { background: linear-gradient(180deg, #6f8fcf, #4d6fb3); }
+  .lg-bar.don { background: linear-gradient(180deg, #d06a6a, #b34848); }
+  .lg-toku { color: #d4a017; font-size: 13px; }
+  .lg-hol { width: 16px; height: 12px; border-radius: 3px; background: repeating-linear-gradient(135deg, #f4f0e8, #f4f0e8 3px, #ddd5c5 3px, #ddd5c5 6px); border: 1px solid #ddd5c5; }
+  .lg-today { width: 16px; height: 12px; border-radius: 3px; box-shadow: inset 0 0 0 2px #d48c20; }
+  .lg-wsat { font-size: 9px; font-weight: 700; color: #7a5ab0; background: #efe8fb; border: 1px solid #cdbbef; border-radius: 6px; padding: 0 4px; }
+  .rc-hint { margin-left: auto; color: #a09080; }
+  @media (max-width: 760px) {
+    .rc-months { grid-template-columns: 1fr; }
+    .rc-day { min-height: 62px; }
+    .rc-toku span { display: none; }
+    .rc-hint { margin-left: 0; }
+  }
   .form-ov { display: none; position: fixed; inset: 0; background: rgba(40,30,15,0.5); z-index: 2500; justify-content: center; align-items: center; padding: 16px; }
   .form-ov.active { display: flex; }
   .form-box { background: #fff; border-radius: 14px; padding: 18px 20px; width: 100%; max-width: 520px; max-height: 92vh; overflow: auto; text-align: left; }
@@ -113,7 +162,7 @@
   </div>
 
   <div class="card">
-    <h3>受付カレンダー <small>今月・来月（青=麺、赤=丼、黄=特弁、灰=休日、枠=今日）</small></h3>
+    <h3>受付カレンダー <small>麺・丼の受付期間と特弁の日を、月ごとに表示します</small></h3>
     <div id="timeline"></div>
   </div>
 

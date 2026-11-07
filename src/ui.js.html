@@ -988,7 +988,12 @@
     if (orderState && menuDef(orderState)) {
       cell.classList.add(orderState);
       icon.innerHTML = iconHtml(orderState, 'cell');
-      label.textContent = labelOf(orderState) + (isEarly(orderState) && new Date() >= earlyDeadline(dateStr) ? '・手配済' : '');
+      // 文字で見分けられるよう、メニュー名を色付きの札で大きく出し、金額を添える
+      var done = isEarly(orderState) && new Date() >= earlyDeadline(dateStr);
+      var shortName = orderState === 'okazu' ? 'おかず' : labelOf(orderState);   // スマホの狭いマス用
+      label.innerHTML = '<span class="ol-name"><span class="ol-full">' + escapeHtml(labelOf(orderState)) + '</span>' +
+        '<span class="ol-short">' + escapeHtml(shortName) + '</span></span>' +
+        '<span class="ol-price">¥' + priceOf(orderState, dateStr) + (done ? '<span class="ol-done">・手配済</span>' : '') + '</span>';
     } else {
       cell.classList.add('empty');
       icon.textContent = '━';
