@@ -718,10 +718,6 @@
     document.getElementById('flyOv').addEventListener('click', function(e) {
       if (e.target === this) closeFlyer();
     });
-    document.getElementById('calendarScroll').addEventListener('scroll', hidePicker);
-    document.addEventListener('click', function(e) {
-      if (!e.target.closest('#picker') && !e.target.closest('.cal-cell')) hidePicker();
-    });
   }
 
   // ===== カレンダーを開く =====
@@ -788,7 +784,6 @@
 
   // ===== カレンダー描画 =====
   function renderCalendar() {
-    hidePicker();
     var today = state.today;
     var y = today.getFullYear();
     var m = today.getMonth();  // 0-11
@@ -849,6 +844,10 @@
   function renderCalendarExtras(msd, med) {
     var note = document.getElementById('calMenuNote');
     var fl = document.getElementById('calFlyers');
+    var ml = document.getElementById('modeLabel');
+    if (ml) ml.textContent = hasExtras()
+      ? 'クリックで注文切替: ー → 弁当 → おかずのみ →（受付日は 麺 → 丼 → 特弁）→ ー'
+      : 'クリックで注文切替: ー → 弁当 → おかずのみ → ー';
     if (!hasExtras()) {
       note.style.display = 'none';
       fl.innerHTML = '';
@@ -965,7 +964,7 @@
         showToast(labelOf(orderState) + 'は ' + deadlineLabel(earlyDeadline(dateStr)) + ' に西原屋さんへ注文済みのため、変更・取消できません。総務へご連絡ください', true);
       });
     } else {
-      cell.addEventListener('click', function() { showPicker(dateStr, cell); });
+      cell.addEventListener('click', function() { onCellClick(dateStr, cell); });
     }
 
     return cell;
@@ -1012,69 +1011,26 @@
     }
   }
 
-  // ===== メニュー選択の小窓 =====
-  function showPicker(dateStr, cell) {
+  // ===== 日付クリックで注文を順に切り替え（従来どおり） =====
+  // ー → 弁当 → おかずのみ →（その日に選べる 麺 → 丼 → 特弁）→ ー
+  // 麺・丼・特弁は、受付期間の日で締切前のときだけ順番に入る
+  function cycleOrder(dateStr) {
+    var list = [''];
+    state.menus.forEach(function(m) {
+      if (m.kind === 'always') list.push(m.key);
+      else if (earlyOpen(m.key, dateStr)) list.push(m.key);
+    });
+    return list;
+  }
+
+  function onCellClick(dateStr, cell) {
     if (!state.currentUser) return;
     var rez = state.reservations[state.currentUser.code + '_' + dateStr];
     var cur = rez ? rez.orderState : '';
-    var p = document.getElementById('picker');
-    var h = '<div class="picker-head">' + escapeHtml(mdLabel(dateStr)) + '<span>' + (state.locationMode ? '📍逆の拠点で手配' : '') + '</span></div>';
-    h += '<button type="button" class="pk' + (cur === '' ? ' cur' : '') + '" data-k=""><span class="pi">━</span><span>なし（注文しない）</span></button>';
-    var extras = hasExtras();
-    state.menus.forEach(function(m) {
-      if (m.kind === 'day' && !offered(m.key, dateStr)) return;            // 特弁はその日だけ
-      if (m.kind === 'period' && !extras) return;                           // 設定のない期間は出さない
-      if (m.kind === 'period' && !offered(m.key, dateStr) &&
-          !state.periods.some(function(q) { return q.menu === m.key && q.to >= state.todayStr; })) return;
-      var ok = true, why = '', ng = false;
-      if (isEarly(m.key)) {
-        if (!offered(m.key, dateStr)) {
-          var nx = state.periods.filter(function(q) { return q.menu === m.key && q.from > dateStr; })
-            .sort(function(a, b) { return a.from < b.from ? -1 : 1; })[0];
-          ok = false; ng = true; why = '受付期間外' + (nx ? '（次は ' + mdShort(nx.from) + '〜）' : '');
-        } else if (!earlyOpen(m.key, dateStr)) {
-          ok = false; ng = true; why = '締切 ' + deadlineLabel(earlyDeadline(dateStr)) + ' を過ぎたため選べません';
-        } else {
-          why = '締切 ' + deadlineLabel(earlyDeadline(dateStr));
-        }
-      }
-      var title = m.key === 'toku' ? '特弁 ' + (tokuOn(dateStr) ? tokuOn(dateStr).name : '') : m.label;
-      h += '<button type="button" class="pk' + (cur === m.key ? ' cur' : '') + (m.key === 'toku' ? ' toku' : '') + '" data-k="' + m.key + '"' + (ok ? '' : ' disabled') + '>' +
-        '<span class="pi">' + iconHtml(m.key, 'pk') + '</span>' +
-        '<span>' + escapeHtml(title) + (why ? '<span class="why' + (ng ? ' ng' : '') + '">' + escapeHtml(why) + '</span>' : '') + '</span>' +
-        '<span class="pp">¥' + priceOf(m.key, dateStr) + '</span></button>';
-    });
-    var fls = [];
-    var pd = periodOf('don', dateStr), pm = periodOf('men', dateStr), tk = tokuOn(dateStr);
-    if (pd && pd.flyerId) fls.push('<button type="button" data-fly="' + escapeHtml(pd.flyerId) + '" data-title="丼メニュー">📄 丼メニュー</button>');
-    if (pm && pm.flyerId) fls.push('<button type="button" data-fly="' + escapeHtml(pm.flyerId) + '" data-title="麺メニュー">📄 麺メニュー</button>');
-    if (tk && tk.flyerId) fls.push('<button type="button" data-fly="' + escapeHtml(tk.flyerId) + '" data-title="' + escapeHtml('特弁 ' + tk.name) + '">📄 特弁チラシ</button>');
-    if (fls.length > 0) h += '<div class="pk-flyers">' + fls.join('') + '</div>';
-    p.innerHTML = h;
-    p.classList.add('active');
-
-    // 位置: 日付マスの下（画面からはみ出すなら上）
-    var rc = cell.getBoundingClientRect();
-    var pw = p.offsetWidth || 270, ph = p.offsetHeight;
-    var left = Math.min(window.innerWidth - pw - 8, Math.max(8, rc.left + rc.width / 2 - pw / 2));
-    var top = rc.bottom + 6;
-    if (top + ph > window.innerHeight - 8) top = Math.max(8, rc.top - ph - 6);
-    p.style.left = left + 'px';
-    p.style.top = top + 'px';
-
-    Array.prototype.slice.call(p.querySelectorAll('.pk')).forEach(function(b) {
-      b.addEventListener('click', function(e) {
-        e.stopPropagation();
-        if (b.disabled) return;
-        hidePicker();
-        onSelectMenu(dateStr, cell, b.getAttribute('data-k'));
-      });
-    });
-  }
-
-  function hidePicker() {
-    var p = document.getElementById('picker');
-    if (p) p.classList.remove('active');
+    var list = cycleOrder(dateStr);
+    var i = list.indexOf(cur);
+    var next = i === -1 ? '' : list[(i + 1) % list.length];
+    onSelectMenu(dateStr, cell, next);
   }
 
   // ===== メニュー決定（拠点は現在のモードで決定） =====
@@ -1215,14 +1171,12 @@
   // ===== 拠点変更モード切替 =====
   function toggleLocationMode() {
     state.locationMode = !state.locationMode;
-    hidePicker();
     document.getElementById('calBentoBox').classList.toggle('location-mode', state.locationMode);
     document.getElementById('locationBtn').classList.toggle('active', state.locationMode);
   }
 
   // ===== カレンダーを閉じる =====
   function closeCalendar() {
-    hidePicker();
     // 変更があった場合のみトーストを表示
     var hadChanges = ChangeQueue.hasChanges() || state.hadAnyChangeThisSession === true;
     if (ChangeQueue.hasChanges()) {

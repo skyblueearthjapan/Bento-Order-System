@@ -331,23 +331,6 @@
   .mchip.closed { opacity: 0.35; text-decoration: line-through; }
   .legend-icon.img { background: #fff; border: 1px solid #e8dcc0; }
 
-  /* ===== メニュー選択の小窓 ===== */
-  .picker { position: fixed; z-index: 1500; background: #fff; border: 2px solid #c49245; border-radius: 12px; box-shadow: 0 8px 24px rgba(60,40,10,0.35); padding: 8px; width: 270px; display: none; }
-  .picker.active { display: block; }
-  .picker-head { font-size: 12px; font-weight: 700; color: #8b6914; padding: 2px 4px 6px; border-bottom: 1px dashed #e0d5c5; margin-bottom: 6px; display: flex; justify-content: space-between; }
-  .picker-head span { font-weight: 400; color: #a09080; font-size: 11px; }
-  .pk { display: flex; align-items: center; gap: 8px; width: 100%; font-family: inherit; font-size: 13px; padding: 5px 8px; border: 1.5px solid transparent; border-radius: 8px; background: #fdfaf4; margin-bottom: 4px; cursor: pointer; text-align: left; color: #5a4a3a; }
-  .pk:hover:not([disabled]) { border-color: #e8a830; background: #fff8e8; }
-  .pk.cur { border-color: #a07828; background: #fff2e0; font-weight: 700; }
-  .pk.toku { background: #fff8d6; }
-  .pk .pi { width: 32px; text-align: center; font-size: 18px; flex: none; }
-  .pk .pp { margin-left: auto; font-size: 11px; color: #a09080; white-space: nowrap; }
-  .pk[disabled] { opacity: 0.45; cursor: not-allowed; }
-  .pk .why { display: block; font-size: 10px; font-weight: 400; color: #a07828; }
-  .pk .why.ng { color: #b05050; }
-  .pk-flyers { border-top: 1px dashed #e0d5c5; padding-top: 6px; margin-top: 2px; display: flex; gap: 4px; flex-wrap: wrap; }
-  .pk-flyers button { font-family: inherit; font-size: 10.5px; border: 1px solid #c49245; background: #fff; color: #8b6914; border-radius: 12px; padding: 2px 8px; cursor: pointer; }
-
   /* ===== チラシ表示 ===== */
   .fly-ov { display: none; position: fixed; inset: 0; background: rgba(20,15,10,0.75); z-index: 2500; justify-content: center; align-items: center; padding: 12px; }
   .fly-ov.active { display: flex; }
