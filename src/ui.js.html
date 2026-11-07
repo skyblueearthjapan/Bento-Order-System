@@ -9,9 +9,12 @@
   var RESERVATION_WINDOW_DAYS = 14;
   var DEADLINE_HOUR = 8;
   var SAT_DEADLINE_HOUR = 15;
+  var EARLY_DEADLINE_HOUR = 8;     // 麺・丼・特弁: 前の平日の 8:00
   var MONTH_START_DAY = 16;
+  var TOKU_BANNER_DAYS = 21;       // 特弁のお知らせを何日前から出すか
 
   var WEEKDAY_JP = ['日', '月', '火', '水', '木', '金', '土'];
+  var EARLY_KEYS = ['men', 'don', 'toku'];
 
   // ===== グローバル状態 =====
   var state = {
@@ -19,6 +22,11 @@
     calendar: [],
     calendarMap: {},  // date → entry
     reservations: {},  // key "code_date" → reservation
+    menus: [],
+    periods: [],
+    tokus: [],
+    isAdmin: false,
+    adminUrl: '',
     currentUser: null,
     locationMode: false,
     saveStatus: 'saved',
@@ -127,6 +135,14 @@
       clearSaved: function(saved) {
         saved.forEach(function(s) { delete queue[s.workerCode + '_' + s.date]; });
       },
+      // 送信した時点の変更（_seq が同じ）がまだ残っていれば消す。送信中に選び直した新しい変更は残す
+      clearIfSame: function(key, sentSeq) {
+        if (queue[key] && queue[key]._seq === sentSeq) { delete queue[key]; return true; }
+        return false;
+      },
+      isSuperseded: function(key, sentSeq) {
+        return !!(queue[key] && queue[key]._seq !== sentSeq);
+      },
       clearAll: function() { queue = {}; },
       setTimer: function(t) { pendingTimer = t; },
       clearTimer: function() { if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; } }
@@ -178,7 +194,10 @@
     SaveManager.isSaving = true;
     updateSaveStatus('saving');
 
-    var changes = ChangeQueue.getAll().map(function(c) {
+    var sent = ChangeQueue.getAll();
+    var sentSeq = {};  // key → 送ったときの _seq（送信中に選び直された変更を消さないため）
+    sent.forEach(function(c) { sentSeq[c.workerCode + '_' + c.date] = c._seq; });
+    var changes = sent.map(function(c) {
       return {
         workerCode: c.workerCode,
         workerName: c.workerName,
@@ -191,13 +210,11 @@
     return GasPromise.call('api_applyPatch', changes).then(function(results) {
       var ok = (results || []).filter(function(r) { return r.success; });
       var ng = (results || []).filter(function(r) { return !r.success; });
-      ChangeQueue.clearSaved(ok);
-      if (state.currentUser && ok.length > 0) {
-        DraftStore.clearDates(state.currentUser.code, ok.map(function(r) { return r.date; }));
-      }
-      // 成功した変更はstateにも反映（キャンセル時はrow===nullなのでstateから削除）
+      // 成功した変更はキュー・下書き・stateに反映（送信中に選び直した日は、新しい選択を残す）
       ok.forEach(function(r) {
         var key = r.workerCode + '_' + r.date;
+        if (!ChangeQueue.clearIfSame(key, sentSeq[key])) return;
+        DraftStore.clearDates(r.workerCode, [r.date]);
         if (r.row) {
           state.reservations[key] = r.row;
         } else {
@@ -206,19 +223,29 @@
       });
       if (ng.length > 0) {
         console.error('Partial save failure:', ng);
-        // 恒久的に失敗する変更（過去日・締切超過など）はキューと下書きから除去し、無限リトライを防ぐ
-        ChangeQueue.clearSaved(ng);
-        if (state.currentUser) {
-          var lockedDates = ng.filter(function(r) { return isDateLocked(r.date); })
-                              .map(function(r) { return r.date; });
-          if (lockedDates.length > 0) DraftStore.clearDates(state.currentUser.code, lockedDates);
+        // 何度送っても通らない変更（締切後・期間外など）はキューと下書きから外し、表示をサーバーの状態に戻す
+        var permanent = ng.filter(function(r) { return r.permanent || isDateLocked(r.date); });
+        var reverted = permanent.filter(function(r) {
+          var key = r.workerCode + '_' + r.date;
+          if (!ChangeQueue.clearIfSame(key, sentSeq[key])) return false;
+          DraftStore.clearDates(r.workerCode, [r.date]);
+          if (r.current && r.current.orderState) state.reservations[key] = r.current;
+          else delete state.reservations[key];
+          return true;
+        });
+        if (state.currentUser && reverted.some(function(r) { return r.workerCode === state.currentUser.code; })) {
+          renderCalendar();
         }
-        // 失敗が全て恒久的（古い下書きの掃除）なら、ユーザー操作の結果ではないためエラー表示しない
-        var allLocked = ng.every(function(r) { return isDateLocked(r.date); });
-        updateSaveStatus(allLocked ? 'saved' : 'error');
+        // 古い下書きの掃除（日付が締切済み）だけなら、ユーザー操作の結果ではないためエラー表示しない
+        var shown = reverted.filter(function(r) { return !isDateLocked(r.date); });
+        if (shown.length > 0) showToast(shown[0].error || '保存できませんでした', true);
+        var retry = ng.length - permanent.length;
+        updateSaveStatus(retry > 0 ? 'error' : (ChangeQueue.hasChanges() ? 'unsaved' : 'saved'));
       } else {
-        updateSaveStatus('saved');
+        updateSaveStatus(ChangeQueue.hasChanges() ? 'unsaved' : 'saved');
       }
+      // 送信中に選び直された変更があれば、続けて保存する（通信エラーの再送は30秒ごとの定期保存に任せる）
+      if (ChangeQueue.hasChanges() && !retry) SaveManager.scheduleSave();
     }).catch(function(err) {
       console.error('Save failed:', err);
       updateSaveStatus('error');
@@ -259,8 +286,15 @@
       (data.reservations || []).forEach(function(r) {
         state.reservations[r.workerCode + '_' + r.date] = r;
       });
+      state.menus = data.menus || [];
+      state.periods = data.menuPeriods || [];
+      state.tokus = data.tokus || [];
+      state.isAdmin = !!data.isAdmin;
+      state.adminUrl = data.adminUrl || '';
 
+      renderAdminButton();
       renderNotice(data.notice, data.warning);
+      renderExtras();
       renderDeptDropdown();
       setupSearch();
       setupButtons();
@@ -270,6 +304,18 @@
       var n2 = document.getElementById('noticeArea');
       if (n2) { n2.textContent = 'データ取得に失敗しました: ' + (err.message || err); n2.style.background = '#fef2f2'; n2.style.borderLeftColor = '#e85050'; }
     });
+  }
+
+  // ===== 総務設定ボタン（設定できる人だけ） =====
+  function renderAdminButton() {
+    var b = document.getElementById('adminBtn');
+    if (!b) return;
+    if (state.isAdmin && state.adminUrl) {
+      b.href = state.adminUrl;
+      b.style.display = '';
+    } else {
+      b.style.display = 'none';
+    }
   }
 
   // ===== お知らせ描画 =====
@@ -300,6 +346,281 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
+
+  // ===== 日付ヘルパー（JSTのYYYY-MM-DD文字列で計算） =====
+  function dObj(ds) { return new Date(ds + 'T12:00:00+09:00'); }
+  function dowOf(ds) { return dObj(ds).getUTCDay(); }
+  function addDaysStr(ds, n) {
+    var d = dObj(ds);
+    d.setTime(d.getTime() + n * 86400000);
+    return d.getUTCFullYear() + '-' + ('0' + (d.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + d.getUTCDate()).slice(-2);
+  }
+  function mdLabel(ds) {
+    var d = dObj(ds);
+    return (d.getUTCMonth() + 1) + '月' + d.getUTCDate() + '日（' + WEEKDAY_JP[d.getUTCDay()] + '）';
+  }
+  function mdShort(ds) {
+    var d = dObj(ds);
+    return (d.getUTCMonth() + 1) + '/' + d.getUTCDate() + '（' + WEEKDAY_JP[d.getUTCDay()] + '）';
+  }
+  function hmOf(date) {
+    // 端末の時刻をJSTの「HH:mm」で表示（締切は8:00/15:00固定なので表示用）
+    var j = new Date(date.getTime() + 9 * 3600000);
+    return ('0' + j.getUTCHours()).slice(-2) + ':' + ('0' + j.getUTCMinutes()).slice(-2);
+  }
+  function deadlineLabel(date) {
+    var j = new Date(date.getTime() + 9 * 3600000);
+    return (j.getUTCMonth() + 1) + '/' + j.getUTCDate() + '（' + WEEKDAY_JP[j.getUTCDay()] + '）' + hmOf(date);
+  }
+
+  // ===== 社内カレンダーの判定 =====
+  function isWorkSatDs(ds) {
+    var c = state.calendarMap[ds];
+    return !!(c && c.type === '出勤土曜');
+  }
+  function isOffMaster(ds) {
+    var c = state.calendarMap[ds];
+    return !!(c && (c.type === '休日' || c.type === '祝日'));
+  }
+  function isHolidayDs(ds) {
+    var w = dowOf(ds);
+    return isOffMaster(ds) || w === 0 || (w === 6 && !isWorkSatDs(ds));
+  }
+  function isWeekdayBiz(ds) {
+    var w = dowOf(ds);
+    return w >= 1 && w <= 5 && !isOffMaster(ds);
+  }
+  function prevWeekdayBiz(ds) {
+    var d = addDaysStr(ds, -1);
+    for (var i = 0; i < 30; i++) {
+      if (isWeekdayBiz(d)) return d;
+      d = addDaysStr(d, -1);
+    }
+    return d;
+  }
+
+  // ===== メニューのルール =====
+  function menuDef(key) {
+    for (var i = 0; i < state.menus.length; i++) if (state.menus[i].key === key) return state.menus[i];
+    return null;
+  }
+  function isEarly(key) { return EARLY_KEYS.indexOf(key) !== -1; }
+  function periodOf(key, ds) {
+    for (var i = 0; i < state.periods.length; i++) {
+      var p = state.periods[i];
+      if (p.menu === key && p.from <= ds && ds <= p.to) return p;
+    }
+    return null;
+  }
+  function tokuOn(ds) {
+    for (var i = 0; i < state.tokus.length; i++) if (state.tokus[i].date === ds) return state.tokus[i];
+    return null;
+  }
+  function offered(key, ds) {
+    var m = menuDef(key);
+    if (!m) return false;
+    if (m.kind === 'always') return true;
+    if (m.kind === 'day') return !!tokuOn(ds);
+    return !!periodOf(key, ds);
+  }
+  function earlyDeadline(ds) {
+    return new Date(prevWeekdayBiz(ds) + 'T' + ('0' + EARLY_DEADLINE_HOUR).slice(-2) + ':00:00+09:00');
+  }
+  /** 麺・丼・特弁を今まだ選べるか */
+  function earlyOpen(key, ds) {
+    return offered(key, ds) && new Date() < earlyDeadline(ds);
+  }
+  function priceOf(key, ds) {
+    if (key === 'toku') { var t = tokuOn(ds); return t ? t.price : 0; }
+    var m = menuDef(key);
+    return m ? m.price : 0;
+  }
+  function labelOf(key) { var m = menuDef(key); return m ? m.label : key; }
+
+  /** 今日以降に麺・丼・特弁の設定があるか（なければ従来どおりの静かな画面） */
+  function hasExtras() {
+    var t = state.todayStr;
+    return state.periods.some(function(p) { return p.to >= t; }) ||
+           state.tokus.some(function(x) { return x.date >= t; });
+  }
+  function anyEarlyOffered(ds) {
+    return EARLY_KEYS.some(function(k) { return offered(k, ds); });
+  }
+  /** 平日 ds の朝8:00が締切になる日 */
+  function daysDueOn(ds) {
+    if (!isWeekdayBiz(ds)) return [];
+    var out = [];
+    for (var i = 1; i <= 20; i++) {
+      var d = addDaysStr(ds, i);
+      if (isHolidayDs(d)) continue;
+      var pd = prevWeekdayBiz(d);
+      if (pd === ds) out.push(d);
+      else if (pd > ds) break;
+    }
+    return out;
+  }
+  /** 次に来る麺・丼・特弁の締切 {due:Date, dueDs, targets:[ds]} */
+  function nextDue() {
+    var now = new Date();
+    for (var i = 0; i < 25; i++) {
+      var ds = addDaysStr(state.todayStr, i);
+      var due = new Date(ds + 'T' + ('0' + EARLY_DEADLINE_HOUR).slice(-2) + ':00:00+09:00');
+      if (due <= now) continue;
+      var targets = daysDueOn(ds).filter(anyEarlyOffered);
+      if (targets.length > 0) return { due: due, dueDs: ds, targets: targets };
+    }
+    return null;
+  }
+
+  // ===== メニューのアイコン =====
+  function iconHtml(key, where) {
+    var src = (window.MENU_ICONS || {})[key];
+    if (!src) return '';
+    return '<img class="mi mi-' + where + '" src="' + src + '" alt="' + escapeHtml(labelOf(key)) + '">';
+  }
+
+  // ===== 麺・丼・特弁のご案内（1行のお知らせ＋入力窓の下の案内欄） =====
+  var Ticker = { items: [], i: 0, timer: null };
+
+  function renderExtras() {
+    var sec = document.getElementById('extraSec');
+    var tk = document.getElementById('ticker');
+    if (!hasExtras()) {
+      if (sec) sec.style.display = 'none';
+      if (tk) tk.style.display = 'none';
+      return;
+    }
+    sec.style.display = '';
+    renderCountdown();
+    renderTokuBanner();
+    renderPeriodBox();
+    renderTicker();
+  }
+
+  function renderCountdown() {
+    var el = document.getElementById('countdown');
+    var nd = nextDue();
+    if (!nd) { el.innerHTML = ''; return; }
+    var mins = Math.round((nd.due - new Date()) / 60000);
+    var left = mins < 60 ? 'あと' + mins + '分' : (mins < 24 * 60 ? 'あと' + Math.floor(mins / 60) + '時間' : '');
+    var tg = nd.targets.map(mdShort).join('・');
+    var hasToku = nd.targets.some(function(d) { return !!tokuOn(d); });
+    if (nd.dueDs === state.todayStr) {
+      el.innerHTML = '<div class="countdown"><span class="big">⏰</span><div><b>今朝8:00で締切</b>（' + left + '）<br>' + tg + ' の麺・丼' + (hasToku ? '・特弁' : '') + '</div></div>';
+    } else {
+      el.innerHTML = '<div class="countdown calm"><span class="big">🗓</span><div><b>次の締切：' + mdLabel(nd.dueDs) + ' 朝8:00</b>' + (left ? '（' + left + '）' : '') + '<br>' + tg + ' の分</div></div>';
+    }
+  }
+
+  function renderTokuBanner() {
+    var el = document.getElementById('tokuBanner');
+    var t0 = state.todayStr, lim = addDaysStr(t0, TOKU_BANNER_DAYS);
+    var up = state.tokus.filter(function(x) { return x.date >= t0 && x.date <= lim; })
+      .sort(function(a, b) { return a.date < b.date ? -1 : 1; });
+    if (up.length === 0) { el.innerHTML = ''; return; }
+    el.innerHTML = up.map(function(x) {
+      var closed = new Date() >= earlyDeadline(x.date);
+      return '<div class="toku-banner">' + iconHtml('toku', 'big') +
+        '<div><h3>⭐ 特弁のお知らせ</h3><div class="tn">' + escapeHtml(mdLabel(x.date) + '　' + x.name + '　¥' + x.price) + '</div>' +
+        '<div class="tm">' + (closed ? '🔒 受付は締め切りました' : '締切：' + deadlineLabel(earlyDeadline(x.date)) + ' まで（1日かぎり）') +
+        (x.flyerId ? '　<button type="button" class="flyer-btn" data-fly="' + escapeHtml(x.flyerId) + '" data-title="' + escapeHtml('特弁 ' + x.name) + '">📄 チラシを見る</button>' : '') +
+        '</div></div></div>';
+    }).join('');
+  }
+
+  function renderPeriodBox() {
+    var el = document.getElementById('periodBox');
+    var t0 = state.todayStr;
+    var vp = state.periods.filter(function(p) { return p.to >= t0; })
+      .sort(function(a, b) { return a.from < b.from ? -1 : 1; });
+    if (vp.length === 0) { el.innerHTML = ''; return; }
+    var h = '<h3>麺・丼の受付期間</h3>';
+    vp.forEach(function(p) {
+      h += '<div class="period-item">' + iconHtml(p.menu, 'sm') + '<b>' + escapeHtml(labelOf(p.menu)) + '</b>' +
+        (p.from <= t0 ? '<span class="pstat open">受付中</span>' : '<span class="pstat soon">受付予定</span>') +
+        '<span>' + mdLabel(p.from) + ' 〜 ' + mdLabel(p.to) + '</span>' +
+        (p.name ? '<span style="color:#a09080">' + escapeHtml(p.name) + '</span>' : '') +
+        (p.flyerId ? '<button type="button" class="flyer-btn" data-fly="' + escapeHtml(p.flyerId) + '" data-title="' + escapeHtml(labelOf(p.menu) + 'メニュー' + (p.name ? '（' + p.name + '）' : '')) + '">📄 ' + escapeHtml(labelOf(p.menu)) + 'メニューはこちら</button>' : '') +
+        '</div>';
+    });
+    el.innerHTML = h;
+  }
+
+  function tickerItems() {
+    var out = [];
+    var t0 = state.todayStr;
+    var nd = nextDue();
+    if (nd && nd.dueDs === t0) {
+      var mins = Math.round((nd.due - new Date()) / 60000);
+      out.push({ hot: true, lab: '締切', txt: '⏰ 今朝8:00締切（あと' + (mins < 60 ? mins + '分' : Math.floor(mins / 60) + '時間') + '）：' + nd.targets.map(mdShort).join('・') + ' の麺・丼' });
+    }
+    var lim = addDaysStr(t0, TOKU_BANNER_DAYS);
+    state.tokus.filter(function(x) { return x.date >= t0 && x.date <= lim; }).forEach(function(x) {
+      out.push({ lab: '特弁', txt: '⭐ ' + mdShort(x.date) + ' 特弁「' + x.name + '」¥' + x.price + (new Date() >= earlyDeadline(x.date) ? '（受付終了）' : '　締切 ' + deadlineLabel(earlyDeadline(x.date))) });
+    });
+    state.periods.filter(function(p) { return p.to >= t0; })
+      .sort(function(a, b) { return a.from < b.from ? -1 : 1; })
+      .forEach(function(p) {
+        var l = labelOf(p.menu);
+        out.push({ lab: l, txt: (p.name ? p.name + '：' : '') + (p.from <= t0 ? l + 'を受付中（〜' + mdShort(p.to) + '）' : mdShort(p.from) + 'から' + l + 'の受付を始めます') });
+      });
+    if (out.length > 0) out.push({ lab: 'ルール', txt: '📢 麺・丼・特弁の締切は「前の平日の朝8時」です（月曜分は金曜の朝）' });
+    return out;
+  }
+
+  function renderTicker() {
+    var el = document.getElementById('ticker');
+    Ticker.items = tickerItems();
+    if (Ticker.items.length === 0) { el.style.display = 'none'; return; }
+    el.style.display = '';
+    if (Ticker.i >= Ticker.items.length) Ticker.i = 0;
+    drawTicker(false);
+    if (!Ticker.timer) {
+      Ticker.timer = setInterval(function() {
+        Ticker.items = tickerItems();
+        if (Ticker.items.length === 0) return;
+        Ticker.i = (Ticker.i + 1) % Ticker.items.length;
+        drawTicker(true);
+      }, 4500);
+    }
+    el.onclick = function() {
+      var s = document.getElementById('extraSec');
+      if (s && s.scrollIntoView) s.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+  }
+
+  function drawTicker(anim) {
+    var el = document.getElementById('ticker');
+    var it = Ticker.items[Ticker.i];
+    if (!it) return;
+    el.innerHTML = '<span class="tk-lab' + (it.hot ? ' hot' : '') + '">' + escapeHtml(it.lab) + '</span>' +
+      '<span class="tk-txt' + (anim ? ' fade' : '') + '">' + escapeHtml(it.txt) + '</span>' +
+      '<span class="tk-dots">' + Ticker.items.map(function(_, j) { return '<i class="' + (j === Ticker.i ? 'on' : '') + '"></i>'; }).join('') + '</span>' +
+      '<span class="tk-more">詳しく ▼</span>';
+    if (anim) setTimeout(function() { var x = el.querySelector('.tk-txt'); if (x) x.classList.remove('fade'); }, 30);
+  }
+
+  // ===== チラシ表示（押したときだけ開く） =====
+  function openFlyer(fileId, title) {
+    if (!fileId) return;
+    document.getElementById('flyTitle').textContent = '📄 ' + (title || 'メニュー');
+    document.getElementById('flyOpen').href = 'https://drive.google.com/file/d/' + encodeURIComponent(fileId) + '/view';
+    document.getElementById('flyBody').innerHTML = '<iframe src="https://drive.google.com/file/d/' + encodeURIComponent(fileId) + '/preview" allow="autoplay"></iframe>';
+    document.getElementById('flyOv').classList.add('active');
+  }
+  function closeFlyer() {
+    document.getElementById('flyOv').classList.remove('active');
+    document.getElementById('flyBody').innerHTML = '';
+  }
+  // チラシボタンはどこにあっても data-fly で開く
+  document.addEventListener('click', function(e) {
+    var b = e.target.closest ? e.target.closest('[data-fly]') : null;
+    if (b) {
+      e.preventDefault();
+      e.stopPropagation();
+      openFlyer(b.getAttribute('data-fly'), b.getAttribute('data-title'));
+    }
+  }, true);
 
   // ===== 部署プルダウン =====
   function renderDeptDropdown() {
@@ -393,6 +714,14 @@
     document.getElementById('calendarModal').addEventListener('click', function(e) {
       if (e.target === this) closeCalendar();
     });
+    document.getElementById('flyClose').addEventListener('click', closeFlyer);
+    document.getElementById('flyOv').addEventListener('click', function(e) {
+      if (e.target === this) closeFlyer();
+    });
+    document.getElementById('calendarScroll').addEventListener('scroll', hidePicker);
+    document.addEventListener('click', function(e) {
+      if (!e.target.closest('#picker') && !e.target.closest('.cal-cell')) hidePicker();
+    });
   }
 
   // ===== カレンダーを開く =====
@@ -421,13 +750,16 @@
     if (!draft) return;
     var allDates = Object.keys(draft);
     if (allDates.length === 0) return;
-    // 保存が永久に失敗する下書き（過去日・締切超過）は復元せず破棄し、再送ループを防ぐ
-    var locked = allDates.filter(isDateLocked);
-    if (locked.length > 0) {
-      DraftStore.clearDates(worker.code, locked);
-      console.info('Purged unsavable drafts: ' + locked.length + ' dates');
+    // 保存が永久に失敗する下書き（過去日・締切超過・麺丼の締切後や期間外）は復元せず破棄し、再送ループを防ぐ
+    var unsavable = allDates.filter(function(date) {
+      var server = state.reservations[worker.code + '_' + date];
+      return isChangeLocked(date, (draft[date] || {}).orderState || '', server ? server.orderState : '');
+    });
+    if (unsavable.length > 0) {
+      DraftStore.clearDates(worker.code, unsavable);
+      console.info('Purged unsavable drafts: ' + unsavable.length + ' dates');
     }
-    var dates = allDates.filter(function(date) { return !isDateLocked(date); });
+    var dates = allDates.filter(function(date) { return unsavable.indexOf(date) === -1; });
     if (dates.length === 0) return;
     console.info('Recovering draft: ' + dates.length + ' dates');
     dates.forEach(function(date) {
@@ -456,6 +788,7 @@
 
   // ===== カレンダー描画 =====
   function renderCalendar() {
+    hidePicker();
     var today = state.today;
     var y = today.getFullYear();
     var m = today.getMonth();  // 0-11
@@ -508,6 +841,48 @@
     });
 
     renderSummary(monthStart, monthEnd);
+    renderCalendarExtras(formatYmd(monthStart), formatYmd(monthEnd));
+    renderLegend();
+  }
+
+  /** カレンダーの中の麺・丼・特弁の注意書きとチラシボタン（設定がなければ出さない） */
+  function renderCalendarExtras(msd, med) {
+    var note = document.getElementById('calMenuNote');
+    var fl = document.getElementById('calFlyers');
+    if (!hasExtras()) {
+      note.style.display = 'none';
+      fl.innerHTML = '';
+      return;
+    }
+    var nd = nextDue();
+    note.style.display = '';
+    note.innerHTML = '麺・丼・特弁の締切は <b>前の平日の朝8:00</b>（月曜分は金曜の朝）' +
+      (nd ? '　→ 次の締切：' + (nd.dueDs === state.todayStr ? '<b>今朝8:00</b>' : escapeHtml(mdLabel(nd.dueDs)) + ' 8:00') + '（' + nd.targets.map(mdShort).join('・') + '分）' : '');
+    var t0 = state.todayStr, btns = [];
+    state.periods.filter(function(p) { return p.flyerId && p.to >= t0 && p.from <= med; }).forEach(function(p) {
+      btns.push('<button type="button" class="flyer-btn" data-fly="' + escapeHtml(p.flyerId) + '" data-title="' + escapeHtml(labelOf(p.menu) + 'メニュー' + (p.name ? '（' + p.name + '）' : '')) + '">' + iconHtml(p.menu, 'sm') + ' ' + escapeHtml(labelOf(p.menu)) + 'メニュー' + (p.name ? '（' + escapeHtml(p.name) + '）' : '') + '</button>');
+    });
+    state.tokus.filter(function(x) { return x.flyerId && x.date >= t0 && x.date <= med; }).forEach(function(x) {
+      btns.push('<button type="button" class="flyer-btn" data-fly="' + escapeHtml(x.flyerId) + '" data-title="' + escapeHtml('特弁 ' + x.name) + '">' + iconHtml('toku', 'sm') + ' 特弁 ' + mdShort(x.date) + '</button>');
+    });
+    fl.innerHTML = btns.length ? '<span>📄 メニューを見る：</span>' + btns.join('') : '';
+  }
+
+  function renderLegend() {
+    var el = document.getElementById('calLegend');
+    var extras = hasExtras();
+    var h = '';
+    state.menus.forEach(function(m) {
+      if (m.kind !== 'always' && !extras) return;
+      h += '<div class="legend-item"><div class="legend-icon img">' + iconHtml(m.key, 'lg') + '</div>' + escapeHtml(m.label) +
+        (m.key === 'toku' ? '（日により価格）' : ' ¥' + m.price) + '</div>';
+    });
+    h += '<div class="legend-item"><div class="legend-icon empty">━</div>注文なし</div>';
+    if (extras) h += '<div class="legend-item"><span class="mchip men">麺</span><span class="mchip don">丼</span><span class="mchip toku">特</span>受付日（線＝締切済み）</div>';
+    h += '<div class="legend-item"><div class="legend-icon holiday">休</div>休日</div>';
+    h += '<div class="legend-item"><div class="legend-icon locked">🔒</div>確定済み</div>';
+    h += '<div class="legend-item"><div class="legend-icon locked">🕐</div>予約不可</div>';
+    el.innerHTML = h;
   }
 
   function buildCell(d) {
@@ -547,6 +922,7 @@
     if (isWorkSat) {
       cell.classList.add('work-sat');
     }
+    if (tokuOn(dateStr)) cell.classList.add('toku-day');
 
     // 予約状態取得
     var rez = state.reservations[state.currentUser.code + '_' + dateStr];
@@ -554,6 +930,20 @@
     var location = rez ? rez.location : state.currentUser.location;
 
     applyCellDisplay(cell, orderState, location);
+
+    // 麺・丼・特弁の受付日マーク（線＝締切済み）
+    var chips = EARLY_KEYS.filter(function(k) { return offered(k, dateStr); });
+    if (chips.length > 0) {
+      var cw = document.createElement('div');
+      cw.className = 'menu-chips';
+      chips.forEach(function(k) {
+        var sp = document.createElement('span');
+        sp.className = 'mchip ' + k + (earlyOpen(k, dateStr) ? '' : ' closed');
+        sp.textContent = k === 'toku' ? '特' : labelOf(k);
+        cw.appendChild(sp);
+      });
+      cell.appendChild(cw);
+    }
 
     // 今日ハイライト
     if (dateStr === state.todayStr) cell.classList.add('today');
@@ -567,8 +957,15 @@
       cell.classList.add('disabled');
     } else if (isBeyondWindow(dateStr)) {
       cell.classList.add('future-locked');
+    } else if (orderState && isEarly(orderState) && new Date() >= earlyDeadline(dateStr)) {
+      // 麺・丼・特弁は前の平日の朝に注文済み。利用者は変更・取消できない
+      cell.classList.add('menu-locked');
+      cell.title = labelOf(orderState) + 'は注文済みのため変更できません。総務へご連絡ください';
+      cell.addEventListener('click', function() {
+        showToast(labelOf(orderState) + 'は ' + deadlineLabel(earlyDeadline(dateStr)) + ' に西原屋さんへ注文済みのため、変更・取消できません。総務へご連絡ください', true);
+      });
     } else {
-      cell.addEventListener('click', function() { onCellClick(dateStr, cell); });
+      cell.addEventListener('click', function() { showPicker(dateStr, cell); });
     }
 
     return cell;
@@ -576,7 +973,7 @@
 
   function applyCellDisplay(cell, orderState, location) {
     // 既存の状態クラスを除去
-    cell.classList.remove('empty', 'bento', 'okazu');
+    cell.classList.remove('empty', 'bento', 'okazu', 'men', 'don', 'toku');
     // 子要素からorder-icon, order-label, location-badgeを除去
     Array.prototype.slice.call(cell.querySelectorAll('.order-icon, .order-label, .location-badge')).forEach(function(el) {
       el.parentNode.removeChild(el);
@@ -586,22 +983,20 @@
     icon.className = 'order-icon';
     var label = document.createElement('span');
     label.className = 'order-label';
+    var dateStr = cell.getAttribute('data-date');
 
-    if (orderState === 'bento') {
-      cell.classList.add('bento');
-      icon.textContent = '🍙';
-      label.textContent = '弁当';
-    } else if (orderState === 'okazu') {
-      cell.classList.add('okazu');
-      icon.textContent = '🥢';
-      label.textContent = 'おかずのみ';
+    if (orderState && menuDef(orderState)) {
+      cell.classList.add(orderState);
+      icon.innerHTML = iconHtml(orderState, 'cell');
+      label.textContent = labelOf(orderState) + (isEarly(orderState) && new Date() >= earlyDeadline(dateStr) ? '・手配済' : '');
     } else {
       cell.classList.add('empty');
       icon.textContent = '━';
       label.textContent = 'なし';
     }
-    cell.appendChild(icon);
-    cell.appendChild(label);
+    var chips = cell.querySelector('.menu-chips');
+    cell.insertBefore(icon, chips);
+    cell.insertBefore(label, chips);
 
     // 拠点バッジ（注文ありの場合のみ）
     if (orderState && location) {
@@ -612,8 +1007,73 @@
     }
   }
 
-  // ===== セルクリック（3状態トグル、拠点は現在のモードで決定） =====
-  function onCellClick(dateStr, cell) {
+  // ===== メニュー選択の小窓 =====
+  function showPicker(dateStr, cell) {
+    if (!state.currentUser) return;
+    var rez = state.reservations[state.currentUser.code + '_' + dateStr];
+    var cur = rez ? rez.orderState : '';
+    var p = document.getElementById('picker');
+    var h = '<div class="picker-head">' + escapeHtml(mdLabel(dateStr)) + '<span>' + (state.locationMode ? '📍逆の拠点で手配' : '') + '</span></div>';
+    h += '<button type="button" class="pk' + (cur === '' ? ' cur' : '') + '" data-k=""><span class="pi">━</span><span>なし（注文しない）</span></button>';
+    var extras = hasExtras();
+    state.menus.forEach(function(m) {
+      if (m.kind === 'day' && !offered(m.key, dateStr)) return;            // 特弁はその日だけ
+      if (m.kind === 'period' && !extras) return;                           // 設定のない期間は出さない
+      if (m.kind === 'period' && !offered(m.key, dateStr) &&
+          !state.periods.some(function(q) { return q.menu === m.key && q.to >= state.todayStr; })) return;
+      var ok = true, why = '', ng = false;
+      if (isEarly(m.key)) {
+        if (!offered(m.key, dateStr)) {
+          var nx = state.periods.filter(function(q) { return q.menu === m.key && q.from > dateStr; })
+            .sort(function(a, b) { return a.from < b.from ? -1 : 1; })[0];
+          ok = false; ng = true; why = '受付期間外' + (nx ? '（次は ' + mdShort(nx.from) + '〜）' : '');
+        } else if (!earlyOpen(m.key, dateStr)) {
+          ok = false; ng = true; why = '締切 ' + deadlineLabel(earlyDeadline(dateStr)) + ' を過ぎたため選べません';
+        } else {
+          why = '締切 ' + deadlineLabel(earlyDeadline(dateStr));
+        }
+      }
+      var title = m.key === 'toku' ? '特弁 ' + (tokuOn(dateStr) ? tokuOn(dateStr).name : '') : m.label;
+      h += '<button type="button" class="pk' + (cur === m.key ? ' cur' : '') + (m.key === 'toku' ? ' toku' : '') + '" data-k="' + m.key + '"' + (ok ? '' : ' disabled') + '>' +
+        '<span class="pi">' + iconHtml(m.key, 'pk') + '</span>' +
+        '<span>' + escapeHtml(title) + (why ? '<span class="why' + (ng ? ' ng' : '') + '">' + escapeHtml(why) + '</span>' : '') + '</span>' +
+        '<span class="pp">¥' + priceOf(m.key, dateStr) + '</span></button>';
+    });
+    var fls = [];
+    var pd = periodOf('don', dateStr), pm = periodOf('men', dateStr), tk = tokuOn(dateStr);
+    if (pd && pd.flyerId) fls.push('<button type="button" data-fly="' + escapeHtml(pd.flyerId) + '" data-title="丼メニュー">📄 丼メニュー</button>');
+    if (pm && pm.flyerId) fls.push('<button type="button" data-fly="' + escapeHtml(pm.flyerId) + '" data-title="麺メニュー">📄 麺メニュー</button>');
+    if (tk && tk.flyerId) fls.push('<button type="button" data-fly="' + escapeHtml(tk.flyerId) + '" data-title="' + escapeHtml('特弁 ' + tk.name) + '">📄 特弁チラシ</button>');
+    if (fls.length > 0) h += '<div class="pk-flyers">' + fls.join('') + '</div>';
+    p.innerHTML = h;
+    p.classList.add('active');
+
+    // 位置: 日付マスの下（画面からはみ出すなら上）
+    var rc = cell.getBoundingClientRect();
+    var pw = p.offsetWidth || 270, ph = p.offsetHeight;
+    var left = Math.min(window.innerWidth - pw - 8, Math.max(8, rc.left + rc.width / 2 - pw / 2));
+    var top = rc.bottom + 6;
+    if (top + ph > window.innerHeight - 8) top = Math.max(8, rc.top - ph - 6);
+    p.style.left = left + 'px';
+    p.style.top = top + 'px';
+
+    Array.prototype.slice.call(p.querySelectorAll('.pk')).forEach(function(b) {
+      b.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (b.disabled) return;
+        hidePicker();
+        onSelectMenu(dateStr, cell, b.getAttribute('data-k'));
+      });
+    });
+  }
+
+  function hidePicker() {
+    var p = document.getElementById('picker');
+    if (p) p.classList.remove('active');
+  }
+
+  // ===== メニュー決定（拠点は現在のモードで決定） =====
+  function onSelectMenu(dateStr, cell, next) {
     if (!state.currentUser) return;
 
     // 拠点決定: 通常モード→デフォルト拠点、拠点変更モード→逆の拠点
@@ -621,10 +1081,10 @@
     var oppositeLoc = defaultLoc === '新工場' ? '本社工場' : '新工場';
     var location = state.locationMode ? oppositeLoc : defaultLoc;
 
-    // 注文状態トグル: '' → 'bento' → 'okazu' → ''
-    var rez = state.reservations[state.currentUser.code + '_' + dateStr];
+    var key = state.currentUser.code + '_' + dateStr;
+    var rez = state.reservations[key];
     var cur = rez ? rez.orderState : '';
-    var next = cur === '' ? 'bento' : cur === 'bento' ? 'okazu' : '';
+    if (cur === next && (!next || (rez && rez.location === location))) return;
 
     var updated = {
       workerCode: state.currentUser.code,
@@ -635,7 +1095,7 @@
       updatedAt: new Date().toISOString(),
       updatedBy: INIT_CURRENT_USER_EMAIL
     };
-    state.reservations[state.currentUser.code + '_' + dateStr] = updated;
+    state.reservations[key] = updated;
 
     applyCellDisplay(cell, next, location);
 
@@ -696,6 +1156,16 @@
     return false;
   }
 
+  // 「prev → next」への変更が、何度送っても通らないか（日付の締切＋麺・丼・特弁の締切と受付）
+  function isChangeLocked(dateStr, next, prev) {
+    if (isDateLocked(dateStr)) return true;
+    if (next === prev) return false;
+    var pastEarly = new Date() >= earlyDeadline(dateStr);
+    if (prev && isEarly(prev) && pastEarly) return true;
+    if (next && isEarly(next) && (!offered(next, dateStr) || pastEarly)) return true;
+    return false;
+  }
+
   // ===== 集計描画 =====
   function renderSummary(monthStart, monthEnd) {
     if (!state.currentUser) return;
@@ -703,37 +1173,35 @@
     el.innerHTML = '';
 
     var code = state.currentUser.code;
-    var bentoTotal = 0, bentoDone = 0, bentoPlan = 0;
-    var okazuTotal = 0, okazuDone = 0, okazuPlan = 0;
+    var cnt = {};
+    state.menus.forEach(function(m) { cnt[m.key] = { total: 0, done: 0, plan: 0 }; });
 
     var cur = new Date(monthStart);
     while (cur <= monthEnd) {
       var ds = formatYmd(cur);
       var rez = state.reservations[code + '_' + ds];
-      if (rez && rez.orderState) {
+      if (rez && rez.orderState && cnt[rez.orderState]) {
         var isPast = ds < state.todayStr;
-        if (rez.orderState === 'bento') {
-          bentoTotal++;
-          if (isPast) bentoDone++; else bentoPlan++;
-        } else if (rez.orderState === 'okazu') {
-          okazuTotal++;
-          if (isPast) okazuDone++; else okazuPlan++;
-        }
+        cnt[rez.orderState].total++;
+        if (isPast) cnt[rez.orderState].done++; else cnt[rez.orderState].plan++;
       }
       cur.setDate(cur.getDate() + 1);
     }
 
-    var total = bentoTotal + okazuTotal;
     var startM = monthStart.getMonth() + 1;
     var endM = monthEnd.getMonth() + 1;
     var label = startM + '月・' + endM + '月';
 
+    var total = 0;
     var html = '';
     html += '<div class="cal-summary-item"><span class="label" style="font-weight:700; font-size:15px;">' + label + '</span></div>';
-    html += '<div class="cal-summary-item"><span class="label">🍱 弁当:</span><span class="count">' + bentoTotal + '</span>個';
-    html += '<span class="sub">（実績' + bentoDone + ' + 予定' + bentoPlan + '）</span></div>';
-    html += '<div class="cal-summary-item"><span class="label">🥢 おかずのみ:</span><span class="count">' + okazuTotal + '</span>個';
-    html += '<span class="sub">（実績' + okazuDone + ' + 予定' + okazuPlan + '）</span></div>';
+    state.menus.forEach(function(m) {
+      var c = cnt[m.key];
+      total += c.total;
+      if (m.kind !== 'always' && c.total === 0) return;   // 麺・丼・特弁は頼んだときだけ出す
+      html += '<div class="cal-summary-item"><span class="label">' + iconHtml(m.key, 'sm') + ' ' + escapeHtml(m.label) + ':</span><span class="count">' + c.total + '</span>個';
+      html += '<span class="sub">（実績' + c.done + ' + 予定' + c.plan + '）</span></div>';
+    });
     html += '<div class="cal-summary-item"><span class="label">合計:</span><span class="count">' + total + '</span>個</div>';
 
     el.innerHTML = html;
@@ -742,12 +1210,14 @@
   // ===== 拠点変更モード切替 =====
   function toggleLocationMode() {
     state.locationMode = !state.locationMode;
+    hidePicker();
     document.getElementById('calBentoBox').classList.toggle('location-mode', state.locationMode);
     document.getElementById('locationBtn').classList.toggle('active', state.locationMode);
   }
 
   // ===== カレンダーを閉じる =====
   function closeCalendar() {
+    hidePicker();
     // 変更があった場合のみトーストを表示
     var hadChanges = ChangeQueue.hasChanges() || state.hadAnyChangeThisSession === true;
     if (ChangeQueue.hasChanges()) {
@@ -768,13 +1238,22 @@
     if (nameSel) nameSel.innerHTML = '<option value="">-- 名前を選択 --</option>';
     if (nameSearch) nameSearch.value = '';
 
-    if (hadChanges) {
-      var toast = document.getElementById('toast');
-      if (toast) {
-        toast.classList.add('active');
-        setTimeout(function() { toast.classList.remove('active'); }, 2000);
-      }
-    }
+    if (hadChanges) showToast('保存しました');
+  }
+
+  // ===== トースト =====
+  var toastTimer = null;
+  function showToast(msg, isError) {
+    var toast = document.getElementById('toast');
+    if (!toast) return;
+    toast.textContent = msg;
+    toast.style.background = isError ? '#c94040' : '';
+    toast.style.animationDuration = isError ? '4s' : '';
+    toast.classList.remove('active');
+    void toast.offsetWidth;
+    toast.classList.add('active');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function() { toast.classList.remove('active'); }, isError ? 4000 : 2000);
   }
 
   // ===== ヘルパー =====

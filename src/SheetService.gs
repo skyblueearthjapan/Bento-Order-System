@@ -15,6 +15,10 @@ var SheetService = (function() {
     getOrCreateSheet(SHEET_NOTICES, ['種別', '内容', '有効期限', '有効フラグ']);
     getOrCreateSheet(SHEET_OPERATION_LOG, ['日時', 'ユーザー', 'アクション', '作業員コード', '日付', '注文状態', '配達拠点']);
     getOrCreateSheet(SHEET_CONFIG, ['キー', '値']);
+    getOrCreateSheet(SHEET_MENU_PERIODS, MENU_PERIOD_HEADERS);
+    getOrCreateSheet(SHEET_TOKUBEN, TOKUBEN_HEADERS);
+    getOrCreateSheet(SHEET_ADMIN_LOG, ADMIN_LOG_HEADERS);
+    MenuService.ensureAdminSheet();
   }
 
   // ===== 作業員マスタ =====

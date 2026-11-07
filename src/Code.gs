@@ -6,17 +6,31 @@
 // ===== Webアプリ エントリポイント =====
 
 function doGet(e) {
-  var template = HtmlService.createTemplateFromFile('index');
-  var todayStr = formatDateYmd(new Date());
-  var currentUser = '';
-  try {
-    currentUser = Session.getActiveUser().getEmail() || '';
-  } catch (err) {
-    currentUser = '';
+  var page = (e && e.parameter && e.parameter.page) || '';
+  var currentUser = MenuService.currentEmail();
+  var appUrl = '';
+  try { appUrl = ScriptApp.getService().getUrl() || ''; } catch (err) { appUrl = ''; }
+
+  // 総務設定画面（?page=admin）。登録した人だけが開ける
+  if (page === 'admin') {
+    var admin = false;
+    try { admin = MenuService.isAdmin(currentUser); } catch (err) { admin = false; }
+    var at = HtmlService.createTemplateFromFile(admin ? 'admin' : 'denied');
+    at.appTitle = APP_TITLE;
+    at.appUrl = appUrl;
+    at.currentUserEmail = currentUser;
+    at.todayStr = formatDateYmd(new Date());
+    // 総務設定はほかのサイトに埋め込ませない（予約画面からは target="_top" で開く）
+    return at.evaluate()
+      .setTitle(APP_TITLE + ' 総務設定')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.DEFAULT)
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1');
   }
+
+  var template = HtmlService.createTemplateFromFile('index');
   template.appTitle = APP_TITLE;
   template.portalUrl = PORTAL_URL;
-  template.todayStr = todayStr;
+  template.todayStr = formatDateYmd(new Date());
   template.currentUserEmail = currentUser;
 
   return template.evaluate()
@@ -48,6 +62,7 @@ function api_bootstrap() {
     SheetService.initSheets();
 
     var today = new Date();
+    var todayStr = formatDateYmd(today);
     var fromDate = new Date(today);
     fromDate.setDate(fromDate.getDate() - 45);  // 過去45日
     var toDate = new Date(today);
@@ -57,18 +72,12 @@ function api_bootstrap() {
     var calendar = SheetService.getCalendar();
     var reservations = SheetService.getReservationsInRange(formatDateYmd(fromDate), formatDateYmd(toDate));
     var noticeData = SheetService.getNotice();
-    var recipients = [];
-    try {
-      recipients = SheetService.getMailRecipients();
-    } catch (e) {
-      recipients = [];
-    }
 
-    var currentUser = { email: '', name: '' };
-    try {
-      var u = Session.getActiveUser();
-      currentUser.email = u.getEmail() || '';
-    } catch (e) {}
+    var menuCtx = MenuService.loadContext();
+    var monthStart = formatDateYmd(new Date(today.getFullYear(), today.getMonth(), 1));
+    var email = MenuService.currentEmail();
+    var appUrl = '';
+    try { appUrl = ScriptApp.getService().getUrl() || ''; } catch (e) {}
 
     return {
       workers: workers,
@@ -79,11 +88,17 @@ function api_bootstrap() {
       rules: {
         deadlineHour: RULES.DEADLINE_HOUR,
         satDeadlineHour: RULES.SATURDAY_DEADLINE_HOUR,
+        earlyDeadlineHour: RULES.EARLY_DEADLINE_HOUR,
         reservationWindowDays: RULES.RESERVATION_WINDOW_DAYS,
         monthStartDay: RULES.MONTH_START_DAY
       },
-      currentUser: currentUser,
-      today: formatDateYmd(today)
+      menus: MENU_DEFS,
+      menuPeriods: MenuService.publicPeriods(menuCtx, monthStart),
+      tokus: MenuService.publicTokus(menuCtx, monthStart),
+      isAdmin: MenuService.isAdmin(email),
+      adminUrl: appUrl ? appUrl + '?page=admin' : '',
+      currentUser: { email: email, name: '' },
+      today: todayStr
     };
   } catch (err) {
     Logger.log('api_bootstrap error: ' + err.message);
@@ -96,7 +111,8 @@ function api_bootstrap() {
 /**
  * 予約変更の一括保存
  * @param {Array} changes - [{workerCode, workerName, date, orderState, location}, ...]
- * @return {Array} [{success, workerCode, date, row, error}, ...]
+ * @return {Array} [{success, workerCode, date, row, error, permanent, current}, ...]
+ *   失敗時の current はサーバーに残っている予約（なければ null）。画面はこれで表示を戻す。
  */
 function api_applyPatch(changes) {
   var lock = LockService.getDocumentLock();
@@ -110,21 +126,29 @@ function api_applyPatch(changes) {
 
     Logger.log('api_applyPatch: ' + changes.length + ' changes');
 
+    // ルール判定用のデータは1回だけ読む
+    var ctx = MenuService.loadContext();
+    ctx.existing = _reservationMapForChanges_(changes);
+
     var results = [];
     changes.forEach(function(change) {
+      var key = change.workerCode + '_' + change.date;
       try {
-        var validation = Validation.validateChange(change);
+        var validation = Validation.validateChange(change, ctx);
         if (!validation.valid) {
           results.push({
             success: false,
             workerCode: change.workerCode,
             date: change.date,
             row: null,
-            error: validation.message
+            error: validation.message,
+            permanent: validation.permanent,
+            current: ctx.existing[key] || null
           });
           return;
         }
         var row = SheetService.upsertReservation(change);
+        ctx.existing[key] = row;
         logOperation_('upsert', change);
         results.push({
           success: true,
@@ -140,7 +164,9 @@ function api_applyPatch(changes) {
           workerCode: change.workerCode,
           date: change.date,
           row: null,
-          error: err.message
+          error: err.message,
+          permanent: false,
+          current: ctx.existing[key] || null
         });
       }
     });
@@ -152,6 +178,19 @@ function api_applyPatch(changes) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * 変更対象の日付範囲の予約を {code_date: 予約} で返す
+ */
+function _reservationMapForChanges_(changes) {
+  var dates = changes.map(function(c) { return String(c.date || ''); }).filter(function(d) { return d; }).sort();
+  var map = {};
+  if (dates.length === 0) return map;
+  SheetService.getReservationsInRange(dates[0], dates[dates.length - 1]).forEach(function(r) {
+    map[r.workerCode + '_' + r.date] = r;
+  });
+  return map;
 }
 
 /**

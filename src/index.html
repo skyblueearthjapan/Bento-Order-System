@@ -11,7 +11,10 @@
 <!-- ===== ヘッダー ===== -->
 <header class="header">
   <div class="header-title"><span class="emoji">🍱</span><?= appTitle ?></div>
-  <a href="<?= portalUrl ?>" target="_top" class="portal-btn">社内ポータルへ移動</a>
+  <div class="header-right">
+    <a href="#" target="_top" class="admin-btn" id="adminBtn" style="display:none">⚙ 総務設定</a>
+    <a href="<?= portalUrl ?>" target="_top" class="portal-btn">社内ポータルへ移動</a>
+  </div>
 </header>
 
 <!-- ===== 食べ物デコレーション ===== -->
@@ -39,6 +42,9 @@
       <li>期間: 月の16日～翌月15日の1ヶ月単位</li>
     </ul>
   </div>
+
+  <!-- 1行のお知らせ（麺・丼・特弁の設定があるときだけ表示） -->
+  <div class="ticker" id="ticker" style="display:none"></div>
 
   <div class="notice" id="noticeArea">
     <!-- JSで上書き（初期値は空でOK、api_bootstrapで設定） -->
@@ -73,11 +79,25 @@
     </div>
   </div>
 
+  <!-- 麺・丼・特弁のご案内（設定があるときだけ表示。頼む人だけが見る場所なので入力窓の下） -->
+  <section class="extra" id="extraSec" style="display:none">
+    <div class="extra-title">麺・丼・特弁のご案内</div>
+    <div id="countdown"></div>
+    <div id="tokuBanner"></div>
+    <div class="period-box" id="periodBox"></div>
+    <div class="rule-box">
+      <h3>📢 麺・丼・特弁の締切ルール</h3>
+      <div class="rule-row"><span class="ic">⏰</span><div>締切は <b>前の平日の朝8:00</b>（例：木曜の分 → 水曜の朝8時）</div></div>
+      <div class="rule-row"><span class="ic">📅</span><div>月曜の分は <b>金曜の朝8:00</b>（土曜出勤があっても金曜の朝）</div></div>
+      <div class="rule-row"><span class="ic">🔒</span><div>締切の後は <b>選べません・変更や取消もできません</b>（朝のメールで注文済みのため）。困ったときは総務へご連絡ください</div></div>
+    </div>
+  </section>
+
 </main>
 
 <!-- ===== カレンダーモーダル ===== -->
 <div class="modal-overlay" id="calendarModal">
-  <div class="calendar-modal">
+  <div class="calendar-modal" id="calendarScroll">
     <div class="cal-bento-box" id="calBentoBox">
 
       <!-- 蓋（ヘッダー）+ 保存状態 -->
@@ -103,11 +123,13 @@
 
       <!-- 注記 -->
       <div class="cal-note">💡 お弁当予約は２週間まで予約受付をしております。</div>
+      <div class="cal-note red" id="calMenuNote" style="display:none"></div>
+      <div class="cal-flyers" id="calFlyers"></div>
 
       <!-- カレンダー本体 -->
       <div class="cal-inner">
         <div class="cal-mode-bar">
-          <span class="cal-mode-label">クリックで注文切替: ー → ○ → お → ー</span>
+          <span class="cal-mode-label">日付をクリックすると、メニューを選べます</span>
           <button class="cal-location-btn" type="button" id="locationBtn">📍 拠点変更</button>
         </div>
 
@@ -123,17 +145,24 @@
 
         <div class="cal-grid" id="calGrid"></div>
 
-        <div class="cal-legend">
-          <div class="legend-item"><div class="legend-icon bento">🍙</div>弁当 ¥450</div>
-          <div class="legend-item"><div class="legend-icon okazu">🥢</div>おかずのみ ¥350</div>
-          <div class="legend-item"><div class="legend-icon empty">━</div>注文なし</div>
-          <div class="legend-item"><div class="legend-icon holiday">休</div>休日</div>
-          <div class="legend-item"><div class="legend-icon locked">🔒</div>確定済み</div>
-          <div class="legend-item"><div class="legend-icon locked">🕐</div>予約不可</div>
-        </div>
+        <div class="cal-legend" id="calLegend"></div>
       </div>
 
     </div>
+  </div>
+</div>
+
+<!-- ===== メニュー選択の小窓 ===== -->
+<div class="picker" id="picker"></div>
+
+<!-- ===== チラシ表示 ===== -->
+<div class="fly-ov" id="flyOv">
+  <div class="fly-box">
+    <div class="fly-bar">
+      <span id="flyTitle"></span>
+      <span class="fly-actions"><a id="flyOpen" href="#" target="_blank" rel="noopener">別の画面で開く</a><button type="button" id="flyClose">✕ 閉じる</button></span>
+    </div>
+    <div class="fly-body" id="flyBody"></div>
   </div>
 </div>
 
@@ -141,6 +170,7 @@
   var INIT_TODAY = <?!= JSON.stringify(todayStr) ?>;
   var INIT_CURRENT_USER_EMAIL = <?!= JSON.stringify(currentUserEmail) ?>;
 </script>
+<?!= include('icons') ?>
 <?!= include('ui.js') ?>
 
 </body>

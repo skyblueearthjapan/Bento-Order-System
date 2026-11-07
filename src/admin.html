@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title><?= appTitle ?> 総務設定</title>
+<?!= include('style') ?>
+<style>
+  .admin-header { background: linear-gradient(135deg, #5b4a2e 0%, #6e5a36 100%); padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; color: #fff; flex-wrap: wrap; gap: 8px; }
+  .admin-header .t { font-size: 18px; font-weight: 700; letter-spacing: 2px; }
+  .admin-header .who { font-size: 11.5px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .admin-wrap { max-width: 1000px; margin: 0 auto; padding: 20px; }
+  .card { background: #fff; border: 1px solid #e0d5c5; border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; box-shadow: 0 1px 4px rgba(90,60,20,0.06); }
+  .card h3 { font-size: 14.5px; color: #6e5a36; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .card h3 small { font-weight: 400; font-size: 11px; color: #a09080; }
+  .btn { font-family: inherit; font-size: 12.5px; padding: 6px 14px; border-radius: 8px; border: 1.5px solid #a07828; background: #fff; color: #7a5a20; cursor: pointer; }
+  .btn.primary { background: #a07828; color: #fff; }
+  .btn.danger { border-color: #c94040; color: #c94040; }
+  .btn.sm { font-size: 11px; padding: 3px 9px; }
+  .btn[disabled] { opacity: 0.5; cursor: default; }
+  .tbl-wrap { overflow-x: auto; }
+  table.t { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.t th { background: #f5eee2; color: #6e5a36; text-align: left; padding: 7px 8px; border-bottom: 2px solid #e0d5c5; white-space: nowrap; }
+  table.t td { padding: 7px 8px; border-bottom: 1px solid #f0e8d8; vertical-align: middle; }
+  table.t tr.off td { color: #aaa; }
+  .mtag { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .statchip { border: 1px solid #e0d5c5; border-radius: 10px; padding: 8px 12px; font-size: 12px; min-width: 160px; background: #fdfaf4; }
+  .statchip b { display: block; margin-bottom: 2px; }
+  .fixed-rule { font-size: 12.5px; line-height: 1.8; background: #fdfaf4; border-radius: 8px; padding: 8px 12px; }
+  .timeline { display: grid; grid-template-columns: 56px repeat(var(--n), minmax(12px, 1fr)); gap: 1px; font-size: 9px; overflow-x: auto; }
+  .tl-h { text-align: center; color: #a09080; }
+  .tl-h.sun { color: #d05050; } .tl-h.sat { color: #4080c0; }
+  .tl-lab { font-size: 11px; font-weight: 700; display: flex; align-items: center; }
+  .tl-c { height: 20px; background: #f6f1e8; border-radius: 2px; }
+  .tl-c.hol { background: #e3ddd2; } .tl-c.men { background: #9fb4dc; } .tl-c.don { background: #dc9a9a; } .tl-c.toku { background: #f2c94c; }
+  .tl-c.today { outline: 2px solid #d48c20; }
+  .form-ov { display: none; position: fixed; inset: 0; background: rgba(40,30,15,0.5); z-index: 2500; justify-content: center; align-items: center; padding: 16px; }
+  .form-ov.active { display: flex; }
+  .form-box { background: #fff; border-radius: 14px; padding: 18px 20px; width: 100%; max-width: 520px; max-height: 92vh; overflow: auto; text-align: left; }
+  .form-box h4 { font-size: 15px; color: #6e5a36; margin-bottom: 12px; }
+  .f { margin-bottom: 10px; }
+  .f label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 3px; }
+  .f input, .f select { font-family: inherit; font-size: 13px; padding: 6px 8px; border: 1.5px solid #d4c4a0; border-radius: 8px; width: 100%; }
+  .f .row2 { display: flex; gap: 8px; align-items: center; }
+  .f .help { font-size: 10.5px; color: #a09080; margin-top: 2px; }
+  .msg-err { background: #fdecec; color: #a02c2c; border-radius: 6px; padding: 6px 10px; font-size: 12px; margin-bottom: 6px; }
+  .msg-warn { background: #fff6dd; color: #7a5a00; border-radius: 6px; padding: 6px 10px; font-size: 12px; margin-bottom: 6px; }
+  .msg-ok { background: #e9f6ee; color: #1d6a3a; border-radius: 6px; padding: 6px 10px; font-size: 12px; margin-bottom: 6px; }
+  .affected { max-height: 180px; overflow: auto; font-size: 12px; background: #fdfaf4; border-radius: 8px; padding: 6px 10px; margin: 6px 0 10px; }
+  .choice { display: block; border: 1.5px solid #e0d5c5; border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; font-size: 12.5px; cursor: pointer; }
+  .choice input { width: auto; margin-right: 6px; }
+  .dropzone { border: 2px dashed #c8b890; border-radius: 12px; background: #fdfaf4; padding: 16px; text-align: center; font-size: 12.5px; color: #8a7a6a; cursor: pointer; }
+  .dropzone:hover { border-color: #a07828; }
+  .dropzone.over { border-color: #1f9d55; background: #eaf7ef; color: #1d6a3a; }
+  .dropzone .dz-ic { font-size: 28px; display: block; margin-bottom: 4px; }
+  .dz-file { display: flex; align-items: center; gap: 8px; background: #fff; border: 1.5px solid #e0d5c5; border-radius: 10px; padding: 8px 10px; font-size: 12.5px; flex-wrap: wrap; }
+  .dz-file .nm { flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fix-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; align-items: end; }
+  .fix-grid label { font-size: 11.5px; font-weight: 700; display: block; margin-bottom: 2px; }
+  .fix-grid input, .fix-grid select { font-family: inherit; font-size: 13px; padding: 6px 8px; border: 1.5px solid #d4c4a0; border-radius: 8px; width: 100%; }
+  .busy { display: none; position: fixed; inset: 0; background: rgba(255,255,255,0.6); z-index: 3000; justify-content: center; align-items: center; font-size: 14px; color: #6e5a36; font-weight: 700; }
+  .busy.active { display: flex; }
+</style>
+</head>
+<body>
+
+<header class="admin-header">
+  <div class="t">🍱 <?= appTitle ?> ─ 総務設定</div>
+  <div class="who">ログイン中: <?= currentUserEmail ?>　<a class="portal-btn" href="<?= appUrl ?>" target="_top">予約画面へ戻る</a></div>
+</header>
+
+<div class="toast" id="toast"></div>
+<div class="busy" id="busy">処理中です…</div>
+
+<main class="admin-wrap">
+
+  <div class="card"><h3>いまの受付状況 <small id="adminNow"></small></h3><div class="chips" id="statusChips">読み込み中...</div></div>
+
+  <div class="card">
+    <h3>締切のルール <small>変える場合はシステムの修正が必要です</small></h3>
+    <div class="fixed-rule" id="fixedRule"></div>
+  </div>
+
+  <div class="card">
+    <h3>麺・丼の受付期間 <button type="button" class="btn primary" id="addPeriod">＋ 期間を追加</button></h3>
+    <div class="tbl-wrap"><table class="t">
+      <thead><tr><th>メニュー</th><th>期間の名前</th><th>開始日</th><th>終了日</th><th>状態</th><th>チラシ</th><th>予約</th><th>有効</th><th></th></tr></thead>
+      <tbody id="periodTbody"></tbody>
+    </table></div>
+    <div style="font-size:11px;color:#a09080;margin-top:6px">※ 同じメニューの期間はいくつでも登録できます。「有効」を外すと、消さずに一時停止できます。</div>
+  </div>
+
+  <div class="card">
+    <h3>特弁（1日限定） <button type="button" class="btn primary" id="addToku">＋ 特弁を追加</button></h3>
+    <div class="tbl-wrap"><table class="t">
+      <thead><tr><th>日付</th><th>名前</th><th>価格</th><th>締切</th><th>状態</th><th>チラシ</th><th>予約</th><th></th></tr></thead>
+      <tbody id="tokuTbody"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card">
+    <h3>締切後の予約の修正 <small>休みなどで、利用者が変えられなくなった予約を総務が代わりに直します</small></h3>
+    <div class="fix-grid">
+      <div><label>名前</label><select id="fxWho"></select></div>
+      <div><label>日付</label><input type="date" id="fxDate"></div>
+      <div><label>いまの予約</label><div id="fxCur" style="font-size:13px;padding:7px 0">—</div></div>
+      <div><label>直した後</label><select id="fxTo"></select></div>
+      <div style="grid-column:1/-1"><label>理由（履歴に残ります）</label><input id="fxWhy" placeholder="例: 体調不良で休み（本人から電話）"></div>
+    </div>
+    <div id="fxMsg" style="margin-top:8px"></div>
+    <div style="text-align:right"><button type="button" class="btn primary" id="fxDo">この内容で直す</button></div>
+  </div>
+
+  <div class="card">
+    <h3>受付カレンダー <small>今月・来月（青=麺、赤=丼、黄=特弁、灰=休日、枠=今日）</small></h3>
+    <div id="timeline"></div>
+  </div>
+
+  <div class="card">
+    <h3>変更の履歴 <small>直近50件（admin_log シート）</small></h3>
+    <div class="tbl-wrap"><table class="t"><thead><tr><th>日時</th><th>変更した人</th><th>内容</th></tr></thead><tbody id="logTbody"></tbody></table></div>
+  </div>
+</main>
+
+<!-- 期間の小窓 -->
+<div class="form-ov" id="periodForm"><div class="form-box">
+  <h4 id="pfTitle">期間を追加</h4><div id="pfMsg"></div>
+  <div class="f"><label>メニュー</label><select id="pfMenu"><option value="men">麺</option><option value="don">丼</option></select></div>
+  <div class="f"><label>期間の名前（任意）</label><input id="pfName" placeholder="例: 冬の温かい麺"><div class="help">利用者の画面と総務へのメールに表示されます。</div></div>
+  <div class="f"><label>受付する期間</label><div class="row2"><input type="date" id="pfFrom"> 〜 <input type="date" id="pfTo"></div><div class="help">開始日・終了日の両日とも含みます。休日は自動で選べなくなります。</div></div>
+  <div class="f"><label>チラシ（スキャンPDF・画像）</label><div id="pfDrop"></div><div class="help">利用者の画面の「📄 メニューはこちら」で表示されます。社内の人だけが見られる設定で保存します。</div></div>
+  <div class="f"><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="pfActive" style="width:auto" checked> 有効にする</label></div>
+  <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" class="btn" id="pfCancel">やめる</button><button type="button" class="btn primary" id="pfSave">保存する</button></div>
+</div></div>
+
+<!-- 特弁の小窓 -->
+<div class="form-ov" id="tokuForm"><div class="form-box">
+  <h4 id="tfTitle">特弁を追加</h4><div id="tfMsg"></div>
+  <div class="f"><label>日付（1日だけ）</label><input type="date" id="tfDate"></div>
+  <div class="f"><label>名前</label><input id="tfName" placeholder="例: 特製すき焼き弁当"></div>
+  <div class="f"><label>価格（税込）</label><input type="number" id="tfPrice" value="900" min="0" step="10"></div>
+  <div class="f"><label>チラシ（スキャンPDF・画像）</label><div id="tfDrop"></div></div>
+  <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" class="btn" id="tfCancel">やめる</button><button type="button" class="btn primary" id="tfSave">保存する</button></div>
+</div></div>
+
+<!-- 受付から外れる予約の確認 -->
+<div class="form-ov" id="impactForm"><div class="form-box">
+  <h4>⚠ この変更で、受付から外れる予約があります</h4>
+  <div id="impactBody"></div>
+  <label class="choice"><input type="radio" name="imp" value="keep" checked>予約はそのまま残す（集計とメールにはそのまま載ります）</label>
+  <label class="choice"><input type="radio" name="imp" value="bento">「弁当」に切り替える</label>
+  <label class="choice"><input type="radio" name="imp" value="cancel">取り消す</label>
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px"><button type="button" class="btn" id="impCancel">保存をやめる</button><button type="button" class="btn primary" id="impOk">この内容で保存</button></div>
+</div></div>
+
+<!-- チラシ表示 -->
+<div class="fly-ov" id="flyOv">
+  <div class="fly-box">
+    <div class="fly-bar"><span id="flyTitle"></span><span class="fly-actions"><a id="flyOpen" href="#" target="_blank" rel="noopener">別の画面で開く</a><button type="button" id="flyClose">✕ 閉じる</button></span></div>
+    <div class="fly-body" id="flyBody"></div>
+  </div>
+</div>
+
+<script>
+  var INIT_TODAY = <?!= JSON.stringify(todayStr) ?>;
+</script>
+<?!= include('icons') ?>
+<?!= include('admin.js') ?>
+</body>
+</html>

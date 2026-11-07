@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title><?= appTitle ?> 総務設定</title>
+<?!= include('style') ?>
+</head>
+<body>
+<header class="header">
+  <div class="header-title"><span class="emoji">🍱</span><?= appTitle ?></div>
+</header>
+<main class="top-container">
+  <div class="info-box">
+    <h3>総務設定を開く権限がありません</h3>
+    <ul>
+      <li>この画面は、登録された総務の担当者だけが使えます。</li>
+      <li>ログイン中のアカウント: <?= currentUserEmail || '（取得できませんでした）' ?></li>
+      <li>使う必要がある場合は、システム管理者へご連絡ください。</li>
+    </ul>
+  </div>
+  <a class="portal-btn" href="<?= appUrl ?>" target="_top">予約画面へ戻る</a>
+</main>
+</body>
+</html>

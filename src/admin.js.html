@@ -1,0 +1,494 @@
+<script>
+(function() {
+  'use strict';
+
+  var WD = ['日', '月', '火', '水', '木', '金', '土'];
+  var EARLY_KEYS = ['men', 'don', 'toku'];
+  var D = null;          // api_admin_bootstrap のデータ
+  var calMap = {};
+
+  // ===== google.script.run の Promise 化 =====
+  function call(fn) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return new Promise(function(resolve, reject) {
+      var r = google.script.run.withSuccessHandler(resolve).withFailureHandler(function(e) {
+        reject(e instanceof Error ? e : new Error(e && e.message ? e.message : String(e)));
+      });
+      r[fn].apply(r, args);
+    });
+  }
+  function busy(on) { document.getElementById('busy').classList.toggle('active', !!on); }
+  var toastTimer = null;
+  function toast(msg, err) {
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.style.background = err ? '#c94040' : '';
+    t.style.animationDuration = err ? '4s' : '';
+    t.classList.remove('active'); void t.offsetWidth; t.classList.add('active');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function() { t.classList.remove('active'); }, err ? 4000 : 2000);
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function $(id) { return document.getElementById(id); }
+
+  // ===== 日付（JSTのYYYY-MM-DD） =====
+  function dObj(ds) { return new Date(ds + 'T12:00:00+09:00'); }
+  function dow(ds) { return dObj(ds).getUTCDay(); }
+  function addDays(ds, n) {
+    var d = dObj(ds); d.setTime(d.getTime() + n * 86400000);
+    return d.getUTCFullYear() + '-' + ('0' + (d.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + d.getUTCDate()).slice(-2);
+  }
+  function md(ds) { var d = dObj(ds); return (d.getUTCMonth() + 1) + '月' + d.getUTCDate() + '日（' + WD[d.getUTCDay()] + '）'; }
+  function mds(ds) { var d = dObj(ds); return (d.getUTCMonth() + 1) + '/' + d.getUTCDate() + '（' + WD[d.getUTCDay()] + '）'; }
+  function isWorkSat(ds) { var c = calMap[ds]; return !!(c && c.type === '出勤土曜'); }
+  function isOff(ds) { var c = calMap[ds]; return !!(c && (c.type === '休日' || c.type === '祝日')); }
+  function isHoliday(ds) { var w = dow(ds); return isOff(ds) || w === 0 || (w === 6 && !isWorkSat(ds)); }
+  function isWeekdayBiz(ds) { var w = dow(ds); return w >= 1 && w <= 5 && !isOff(ds); }
+  function prevWeekdayBiz(ds) {
+    var d = addDays(ds, -1);
+    for (var i = 0; i < 30; i++) { if (isWeekdayBiz(d)) return d; d = addDays(d, -1); }
+    return d;
+  }
+  function earlyDeadline(ds) { return new Date(prevWeekdayBiz(ds) + 'T08:00:00+09:00'); }
+  function dlText(ds) { return mds(prevWeekdayBiz(ds)) + ' 8:00'; }
+
+  // ===== メニュー =====
+  function menuDef(k) { for (var i = 0; i < D.menus.length; i++) if (D.menus[i].key === k) return D.menus[i]; return null; }
+  function label(k) { var m = menuDef(k); return m ? m.label : k; }
+  function icon(k, px) {
+    var src = (window.MENU_ICONS || {})[k];
+    return src ? '<img src="' + src + '" alt="" style="width:' + (px || 22) + 'px;height:' + (px || 22) + 'px;vertical-align:middle">' : '';
+  }
+  function tag(k) { return '<span class="mtag">' + icon(k, 22) + esc(label(k)) + '</span>'; }
+  function offered(k, ds) {
+    var m = menuDef(k);
+    if (!m) return false;
+    if (m.kind === 'always') return true;
+    if (m.kind === 'day') return D.tokus.some(function(t) { return t.active && t.date === ds; });
+    return D.periods.some(function(p) { return p.active && p.menu === k && p.from <= ds && ds <= p.to; });
+  }
+
+  // ===== 読み込み・描画 =====
+  function load() {
+    busy(true);
+    call('api_admin_bootstrap').then(function(data) { setData(data); }).catch(function(e) {
+      toast('読み込みに失敗しました: ' + e.message, true);
+    }).then(function() { busy(false); });
+  }
+
+  function setData(data) {
+    D = data;
+    calMap = {};
+    (D.calendar || []).forEach(function(c) { calMap[c.date] = c; });
+    renderAll();
+  }
+
+  function renderAll() {
+    var t = D.today;
+    $('adminNow').textContent = md(t) + ' 時点';
+    renderStatus(); renderRule(); renderPeriods(); renderTokus(); renderTimeline(); renderLog(); initFix();
+  }
+
+  function renderStatus() {
+    var t = D.today, h = '';
+    D.menus.forEach(function(m) {
+      var txt, col;
+      if (m.kind === 'always') { txt = 'いつでも受付'; col = '#1f9d55'; }
+      else if (m.kind === 'day') {
+        var u = D.tokus.filter(function(x) { return x.active && x.date >= t; }).sort(function(a, b) { return a.date < b.date ? -1 : 1; })[0];
+        txt = u ? '次回 ' + md(u.date) : '予定なし'; col = u ? '#8a5a00' : '#999';
+      } else {
+        var c = D.periods.filter(function(p) { return p.active && p.menu === m.key && p.from <= t && t <= p.to; })[0];
+        var nx = D.periods.filter(function(p) { return p.active && p.menu === m.key && p.from > t; }).sort(function(a, b) { return a.from < b.from ? -1 : 1; })[0];
+        txt = c ? '受付中（〜' + md(c.to) + '）' : nx ? '受付予定（' + md(nx.from) + '〜）' : '受付していません';
+        col = c ? '#1f9d55' : nx ? '#3a6890' : '#999';
+      }
+      h += '<div class="statchip"><b>' + tag(m.key) + '</b><span style="color:' + col + ';font-weight:700">' + esc(txt) + '</span></div>';
+    });
+    $('statusChips').innerHTML = h;
+  }
+
+  function renderRule() {
+    var t = D.today, next = null;
+    for (var i = 0; i < 25 && !next; i++) {
+      var ds = addDays(t, i);
+      if (!isWeekdayBiz(ds)) continue;
+      if (new Date(ds + 'T08:00:00+09:00') <= new Date()) continue;
+      var tg = [];
+      for (var j = 1; j <= 20; j++) {
+        var x = addDays(ds, j);
+        if (isHoliday(x)) continue;
+        var pd = prevWeekdayBiz(x);
+        if (pd === ds) { if (EARLY_KEYS.some(function(k) { return offered(k, x); })) tg.push(x); }
+        else if (pd > ds) break;
+      }
+      if (tg.length) next = { ds: ds, tg: tg };
+    }
+    $('fixedRule').innerHTML = '弁当・おかずのみ：当日の朝8:00（出勤土曜は前日金曜15:00）<br>' +
+      '麺・丼・特弁：<b>前の平日の朝8:00</b>（土日・祝日・会社の休日は飛ばす。出勤土曜も飛ばす）。締切直後の朝のメールで、その日が締切の分をお送りします。' +
+      (next ? '<br>次の締切：<b>' + md(next.ds) + ' 8:00</b>　対象：' + next.tg.map(md).join('、') : '');
+  }
+
+  function stat(from, to) {
+    var t = D.today;
+    if (to < t) return '<span class="pstat" style="background:#eee;color:#888">終了</span>';
+    if (from <= t) return '<span class="pstat open">受付中</span>';
+    return '<span class="pstat soon">受付予定</span>';
+  }
+  function flyerBtn(id, title) {
+    return id ? '<button type="button" class="btn sm" data-fly="' + esc(id) + '" data-title="' + esc(title) + '">📄 見る</button>' : '—';
+  }
+
+  function renderPeriods() {
+    var rows = D.periods.slice().sort(function(a, b) { return a.from < b.from ? 1 : -1; });
+    $('periodTbody').innerHTML = rows.length ? rows.map(function(p) {
+      return '<tr class="' + (p.active ? '' : 'off') + '"><td>' + tag(p.menu) + '</td><td>' + esc(p.name || '—') + '</td><td>' + md(p.from) + '</td><td>' + md(p.to) + '</td>' +
+        '<td>' + (p.active ? stat(p.from, p.to) : '<span class="pstat" style="background:#eee;color:#888">停止中</span>') + '</td>' +
+        '<td>' + flyerBtn(p.flyerId, label(p.menu) + 'メニュー') + '</td><td>' + p.count + '件</td>' +
+        '<td><input type="checkbox" ' + (p.active ? 'checked' : '') + ' data-pact="' + esc(p.id) + '"></td>' +
+        '<td style="white-space:nowrap"><button type="button" class="btn sm" data-pedit="' + esc(p.id) + '">編集</button> <button type="button" class="btn sm danger" data-pdel="' + esc(p.id) + '">削除</button></td></tr>';
+    }).join('') : '<tr><td colspan="9" style="color:#a09080">期間が登録されていません。「＋ 期間を追加」から登録してください。</td></tr>';
+  }
+
+  function renderTokus() {
+    var rows = D.tokus.slice().sort(function(a, b) { return a.date < b.date ? 1 : -1; });
+    $('tokuTbody').innerHTML = rows.length ? rows.map(function(x) {
+      var st = x.date < D.today ? '<span class="pstat" style="background:#eee;color:#888">終了</span>' :
+        (new Date() >= earlyDeadline(x.date) ? '<span class="pstat" style="background:#eee;color:#888">締切済</span>' : '<span class="pstat open">受付中</span>');
+      return '<tr><td>' + md(x.date) + '</td><td>' + esc(x.name) + '</td><td>¥' + x.price + '</td><td>' + dlText(x.date) + '</td><td>' + st + '</td>' +
+        '<td>' + flyerBtn(x.flyerId, '特弁 ' + x.name) + '</td><td>' + x.count + '件</td>' +
+        '<td style="white-space:nowrap"><button type="button" class="btn sm" data-tedit="' + esc(x.id) + '">編集</button> <button type="button" class="btn sm danger" data-tdel="' + esc(x.id) + '">削除</button></td></tr>';
+    }).join('') : '<tr><td colspan="8" style="color:#a09080">特弁の予定はありません。</td></tr>';
+  }
+
+  function renderTimeline() {
+    var t = dObj(D.today);
+    var y = t.getUTCFullYear(), m = t.getUTCMonth();
+    var first = y + '-' + ('0' + (m + 1)).slice(-2) + '-01';
+    var days = [];
+    for (var ds = first; days.length < 62; ds = addDays(ds, 1)) {
+      var mm = dObj(ds).getUTCMonth();
+      if (mm !== m && mm !== (m + 1) % 12) break;
+      days.push(ds);
+    }
+    var h = '<div class="timeline" style="--n:' + days.length + '"><div></div>';
+    days.forEach(function(ds) {
+      var w = dow(ds), d = dObj(ds).getUTCDate();
+      h += '<div class="tl-h' + (w === 0 ? ' sun' : w === 6 ? ' sat' : '') + '">' + (d === 1 ? (dObj(ds).getUTCMonth() + 1) + '/' : '') + d + '</div>';
+    });
+    EARLY_KEYS.forEach(function(k) {
+      h += '<div class="tl-lab">' + esc(label(k)) + '</div>';
+      days.forEach(function(ds) {
+        var cls = isHoliday(ds) ? 'hol' : offered(k, ds) ? k : '';
+        h += '<div class="tl-c ' + cls + (ds === D.today ? ' today' : '') + '" title="' + md(ds) + '"></div>';
+      });
+    });
+    $('timeline').innerHTML = h + '</div>';
+  }
+
+  function renderLog() {
+    $('logTbody').innerHTML = (D.log || []).map(function(a) {
+      return '<tr><td style="white-space:nowrap">' + esc(a.at) + '</td><td>' + esc(a.who) + '</td><td>' + esc(a.text) + '</td></tr>';
+    }).join('') || '<tr><td colspan="3" style="color:#a09080">まだ変更はありません。</td></tr>';
+  }
+
+  // ===== チラシのドラッグ＆ドロップ欄 =====
+  // st = { fileId, fileName, file(未アップロードのFile) }
+  var DZ = { pf: null, tf: null };
+  function setupDrop(key, boxId, fileId, fileName) {
+    DZ[key] = { fileId: fileId || '', fileName: fileName || '', file: null };
+    drawDrop(key, boxId);
+  }
+  function drawDrop(key, boxId) {
+    var st = DZ[key], box = $(boxId);
+    var hasAny = st.file || st.fileId;
+    if (hasAny) {
+      box.innerHTML = '<div class="dz-file"><span style="font-size:22px">📄</span><span class="nm">' + esc(st.file ? st.file.name + '（保存すると登録されます）' : (st.fileName || 'チラシ')) + '</span>' +
+        '<button type="button" class="btn sm" data-dzv>見る</button><button type="button" class="btn sm" data-dzc>差し替え</button><button type="button" class="btn sm danger" data-dzr>外す</button></div>' +
+        '<input type="file" accept="application/pdf,image/*" style="display:none">';
+    } else {
+      box.innerHTML = '<div class="dropzone"><span class="dz-ic">📄</span>ここに PDF をドラッグ＆ドロップ<br><span style="font-size:11px">または、押してファイルを選ぶ（スキャンPDF・写真、10MBまで）</span></div>' +
+        '<input type="file" accept="application/pdf,image/*" style="display:none">';
+    }
+    var inp = box.querySelector('input[type=file]');
+    function take(f) {
+      if (!f) return;
+      if (!/^application\/pdf$|^image\//.test(f.type)) { toast('PDF か画像のファイルを選んでください', true); return; }
+      if (f.size > 10 * 1024 * 1024) { toast('ファイルが大きすぎます（10MBまで）', true); return; }
+      st.file = f; drawDrop(key, boxId);
+    }
+    inp.onchange = function() { take(inp.files[0]); };
+    var dz = box.querySelector('.dropzone');
+    if (dz) {
+      dz.onclick = function() { inp.click(); };
+      dz.ondragover = function(e) { e.preventDefault(); dz.classList.add('over'); };
+      dz.ondragleave = function() { dz.classList.remove('over'); };
+      dz.ondrop = function(e) { e.preventDefault(); dz.classList.remove('over'); take(e.dataTransfer && e.dataTransfer.files[0]); };
+    }
+    box.ondragover = function(e) { e.preventDefault(); };
+    box.ondrop = function(e) { e.preventDefault(); take(e.dataTransfer && e.dataTransfer.files[0]); };
+    var v = box.querySelector('[data-dzv]');
+    if (v) v.onclick = function() {
+      if (st.file) openLocal(st.file); else openFlyer(st.fileId, st.fileName);
+    };
+    var c = box.querySelector('[data-dzc]');
+    if (c) c.onclick = function() { inp.click(); };
+    var r = box.querySelector('[data-dzr]');
+    if (r) r.onclick = function() { st.file = null; st.fileId = ''; st.fileName = ''; drawDrop(key, boxId); };
+  }
+  /** 未アップロードのファイルがあれば保存してから {fileId, fileName} を返す */
+  function uploadIfNeeded(key) {
+    var st = DZ[key];
+    if (!st.file) return Promise.resolve({ fileId: st.fileId, fileName: st.fileName });
+    return new Promise(function(resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function() {
+        var b64 = String(fr.result).split(',')[1] || '';
+        call('api_admin_uploadFlyer', { name: st.file.name, mimeType: st.file.type, base64: b64 }).then(function(res) {
+          if (!res.shared) toast('チラシは保存しましたが、社内共有の設定に失敗しました。ドライブで共有設定をご確認ください', true);
+          st.file = null; st.fileId = res.fileId; st.fileName = res.fileName;
+          resolve({ fileId: res.fileId, fileName: res.fileName });
+        }).catch(reject);
+      };
+      fr.onerror = function() { reject(new Error('ファイルを読み込めませんでした')); };
+      fr.readAsDataURL(st.file);
+    });
+  }
+
+  // ===== チラシ表示 =====
+  function openFlyer(id, title) {
+    if (!id) return;
+    $('flyTitle').textContent = '📄 ' + (title || 'チラシ');
+    $('flyOpen').href = 'https://drive.google.com/file/d/' + encodeURIComponent(id) + '/view';
+    $('flyOpen').style.display = '';
+    $('flyBody').innerHTML = '<iframe src="https://drive.google.com/file/d/' + encodeURIComponent(id) + '/preview"></iframe>';
+    $('flyOv').classList.add('active');
+  }
+  function openLocal(file) {
+    var url = URL.createObjectURL(file);
+    $('flyTitle').textContent = '📄 ' + file.name + '（保存前）';
+    $('flyOpen').style.display = 'none';
+    $('flyBody').innerHTML = /^image\//.test(file.type) ? '<img src="' + url + '" style="max-width:100%">' : '<iframe src="' + url + '"></iframe>';
+    $('flyOv').classList.add('active');
+  }
+  $('flyClose').onclick = function() { $('flyOv').classList.remove('active'); $('flyBody').innerHTML = ''; };
+
+  // ===== 受付から外れる予約の確認つき保存 =====
+  var pendingSave = null;
+  function saveWithImpact(fn, args) {
+    busy(true);
+    return call.apply(null, [fn].concat(args).concat([null])).then(function(res) {
+      busy(false);
+      if (res && res.needConfirm) {
+        pendingSave = { fn: fn, args: args, keys: res.affected.map(function(a) { return a.key; }) };
+        $('impactBody').innerHTML = (res.changed ? '<div class="msg-warn">確認している間に、対象の予約が変わりました。もう一度ご確認ください。</div>' : '') +
+          '<p style="font-size:12.5px;margin-bottom:4px">今日以降の <b>' + res.affected.length + '件</b> の予約が、受付から外れます。</p><div class="affected">' +
+          res.affected.map(function(a) {
+            return esc(md(a.date) + '　' + a.name + '　' + label(a.menu)) + (a.ordered ? '　<b style="color:#c0392b">※西原屋さんへ注文済み</b>' : '');
+          }).join('<br>') + '</div>';
+        $('impactForm').classList.add('active');
+        return false;
+      }
+      setData(res.data);
+      toast('保存しました');
+      return true;
+    }).catch(function(e) { busy(false); toast(e.message, true); return false; });
+  }
+  $('impCancel').onclick = function() {
+    pendingSave = null;
+    $('impactForm').classList.remove('active');
+    renderPeriods();  // 「有効」のチェックを元に戻す
+  };
+  $('impOk').onclick = function() {
+    if (!pendingSave) return;
+    var how = document.querySelector('input[name=imp]:checked').value;
+    var ps = pendingSave; pendingSave = null;
+    $('impactForm').classList.remove('active');
+    busy(true);
+    call.apply(null, [ps.fn].concat(ps.args).concat([{ how: how, keys: ps.keys }])).then(function(res) {
+      busy(false);
+      if (res && res.needConfirm) {
+        // 確認中に対象が変わった: もう一度確認画面を出す
+        pendingSave = { fn: ps.fn, args: ps.args, keys: res.affected.map(function(a) { return a.key; }) };
+        $('impactBody').innerHTML = '<div class="msg-warn">確認している間に、対象の予約が変わりました。もう一度ご確認ください。</div>' +
+          '<div class="affected">' + res.affected.map(function(a) {
+            return esc(md(a.date) + '　' + a.name + '　' + label(a.menu)) + (a.ordered ? '　<b style="color:#c0392b">※西原屋さんへ注文済み</b>' : '');
+          }).join('<br>') + '</div>';
+        $('impactForm').classList.add('active');
+        return;
+      }
+      setData(res.data); toast('保存しました');
+    }).catch(function(e) { busy(false); toast(e.message, true); });
+  };
+
+  // ===== 期間 =====
+  var editP = null;
+  function openPForm(id) {
+    var p = id ? D.periods.filter(function(x) { return x.id === id; })[0] : null;
+    editP = p ? p.id : null;
+    $('pfTitle').textContent = p ? '期間を編集' : '期間を追加';
+    $('pfMenu').value = p ? p.menu : 'men';
+    $('pfName').value = p ? p.name : '';
+    $('pfFrom').value = p ? p.from : '';
+    $('pfTo').value = p ? p.to : '';
+    $('pfActive').checked = p ? p.active : true;
+    $('pfMsg').innerHTML = '';
+    setupDrop('pf', 'pfDrop', p ? p.flyerId : '', p ? p.flyerName : '');
+    $('periodForm').classList.add('active');
+  }
+  function checkPForm() {
+    var f = $('pfFrom').value, t = $('pfTo').value, mk = $('pfMenu').value, h = '', ok = true;
+    if (!f || !t) { h += '<div class="msg-err">開始日と終了日を入れてください。</div>'; ok = false; }
+    else if (t < f) { h += '<div class="msg-err">終了日が開始日より前になっています。</div>'; ok = false; }
+    else {
+      if (t < D.today) h += '<div class="msg-warn">終了日が過去です。この期間で注文できる日はありません。</div>';
+      var ov = D.periods.filter(function(p) { return p.id !== editP && p.active && p.menu === mk && p.from <= t && f <= p.to; })[0];
+      if (ov) h += '<div class="msg-warn">同じメニューの期間「' + esc(ov.name || '') + '」（' + md(ov.from) + '〜' + md(ov.to) + '）と重なっています。</div>';
+      var first = null, n = 0;
+      for (var d = f; d <= t && n < 400; d = addDays(d, 1)) { if (!isHoliday(d)) { n++; if (!first && d >= D.today) first = d; } }
+      h += '<div class="msg-ok">注文できる営業日：' + n + '日（休日は自動で除きます）' +
+        (first ? '。最初の日 ' + md(first) + ' の締切は ' + dlText(first) : '') + '</div>';
+    }
+    $('pfMsg').innerHTML = h;
+    return ok;
+  }
+  ['pfMenu', 'pfFrom', 'pfTo'].forEach(function(id) { $(id).addEventListener('change', checkPForm); });
+  $('addPeriod').onclick = function() { openPForm(null); };
+  $('pfCancel').onclick = function() { $('periodForm').classList.remove('active'); };
+  $('pfSave').onclick = function() {
+    if (!checkPForm()) return;
+    busy(true);
+    uploadIfNeeded('pf').then(function(fl) {
+      busy(false);
+      var p = { id: editP, menu: $('pfMenu').value, name: $('pfName').value.trim(), from: $('pfFrom').value, to: $('pfTo').value,
+                active: $('pfActive').checked, flyerId: fl.fileId, flyerName: fl.fileName };
+      return saveWithImpact('api_admin_savePeriod', [p]);
+    }).then(function(done) {
+      if (done !== false) $('periodForm').classList.remove('active');
+      else if (!$('impactForm').classList.contains('active')) { /* エラー時は小窓を開いたまま */ }
+      else $('periodForm').classList.remove('active');
+    }).catch(function(e) { busy(false); toast(e.message, true); });
+  };
+
+  // ===== 特弁 =====
+  var editT = null;
+  function openTForm(id) {
+    var x = id ? D.tokus.filter(function(y) { return y.id === id; })[0] : null;
+    editT = x ? x.id : null;
+    $('tfTitle').textContent = x ? '特弁を編集' : '特弁を追加';
+    $('tfDate').value = x ? x.date : '';
+    $('tfName').value = x ? x.name : '';
+    $('tfPrice').value = x ? x.price : 900;
+    $('tfMsg').innerHTML = '';
+    setupDrop('tf', 'tfDrop', x ? x.flyerId : '', x ? x.flyerName : '');
+    checkTForm();
+    $('tokuForm').classList.add('active');
+  }
+  function checkTForm() {
+    var d = $('tfDate').value, m = $('tfMsg');
+    if (!d) { m.innerHTML = ''; return true; }
+    if (isHoliday(d)) { m.innerHTML = '<div class="msg-err">' + md(d) + ' は休日です。営業日を選んでください。</div>'; return false; }
+    var dl = earlyDeadline(d);
+    var h = '<div class="msg-ok">締切は ' + dlText(d) + ' です（前の平日の朝8:00）。</div>';
+    if (new Date() >= dl) h = '<div class="msg-warn">締切 ' + dlText(d) + ' をすでに過ぎています。登録しても、利用者は選べません。</div>';
+    else {
+      var days = Math.ceil((dl - new Date()) / 86400000);
+      if (days < 7) h += '<div class="msg-warn">締切まで ' + days + ' 日です。お知らせする時間が短いので、貼り紙などでの呼びかけもおすすめします。</div>';
+    }
+    m.innerHTML = h;
+    return true;
+  }
+  $('tfDate').addEventListener('change', checkTForm);
+  $('addToku').onclick = function() { openTForm(null); };
+  $('tfCancel').onclick = function() { $('tokuForm').classList.remove('active'); };
+  $('tfSave').onclick = function() {
+    var d = $('tfDate').value, n = $('tfName').value.trim();
+    if (!d || !n) { $('tfMsg').innerHTML = '<div class="msg-err">日付と名前を入れてください。</div>'; return; }
+    if (!checkTForm()) return;
+    busy(true);
+    uploadIfNeeded('tf').then(function(fl) {
+      busy(false);
+      var t = { id: editT, date: d, name: n, price: Number($('tfPrice').value) || 0, flyerId: fl.fileId, flyerName: fl.fileName };
+      return saveWithImpact('api_admin_saveToku', [t]);
+    }).then(function(done) {
+      if (done !== false || $('impactForm').classList.contains('active')) $('tokuForm').classList.remove('active');
+    }).catch(function(e) { busy(false); toast(e.message, true); });
+  };
+
+  // ===== 表の中のボタン =====
+  document.addEventListener('click', function(e) {
+    var b = e.target.closest ? e.target.closest('button, [data-fly]') : null;
+    if (!b) return;
+    if (b.hasAttribute('data-fly')) { openFlyer(b.getAttribute('data-fly'), b.getAttribute('data-title')); return; }
+    if (b.hasAttribute('data-pedit')) openPForm(b.getAttribute('data-pedit'));
+    else if (b.hasAttribute('data-pdel')) {
+      var p = D.periods.filter(function(x) { return x.id === b.getAttribute('data-pdel'); })[0];
+      if (p && confirm(label(p.menu) + '「' + (p.name || '') + '」' + md(p.from) + '〜' + md(p.to) + ' を削除します。よろしいですか？')) {
+        saveWithImpact('api_admin_deletePeriod', [p.id]);
+      }
+    } else if (b.hasAttribute('data-tedit')) openTForm(b.getAttribute('data-tedit'));
+    else if (b.hasAttribute('data-tdel')) {
+      var x = D.tokus.filter(function(y) { return y.id === b.getAttribute('data-tdel'); })[0];
+      if (x && confirm('特弁 ' + md(x.date) + '「' + x.name + '」を削除します。よろしいですか？')) {
+        saveWithImpact('api_admin_deleteToku', [x.id]);
+      }
+    }
+  });
+  document.addEventListener('change', function(e) {
+    var c = e.target;
+    if (c && c.hasAttribute && c.hasAttribute('data-pact')) {
+      saveWithImpact('api_admin_setPeriodActive', [c.getAttribute('data-pact'), c.checked]).then(function(done) {
+        if (done === false && !$('impactForm').classList.contains('active')) renderPeriods();
+      });
+    }
+  });
+
+  // ===== 締切後の予約の修正 =====
+  var fixInited = false;
+  function initFix() {
+    var sel = $('fxWho');
+    if (!fixInited) {
+      var ws = D.workers.slice().sort(function(a, b) { return (a.dept + a.name).localeCompare(b.dept + b.name, 'ja'); });
+      sel.innerHTML = '<option value="">-- 名前を選ぶ --</option>' + ws.map(function(w) {
+        return '<option value="' + esc(w.code) + '">' + esc(w.name + '（' + w.dept + '）') + '</option>';
+      }).join('');
+      $('fxDate').value = D.today;
+      sel.onchange = $('fxDate').onchange = showFixCurrent;
+      fixInited = true;
+    }
+    $('fxTo').innerHTML = '<option value="">なし（取消）</option>' + D.menus.map(function(m) {
+      return '<option value="' + m.key + '">' + esc(m.label) + '</option>';
+    }).join('');
+  }
+  function showFixCurrent() {
+    var c = $('fxWho').value, d = $('fxDate').value;
+    $('fxMsg').innerHTML = '';
+    if (!c || !d) { $('fxCur').textContent = '—'; return; }
+    $('fxCur').textContent = '確認中...';
+    call('api_admin_getReservation', c, d).then(function(r) {
+      $('fxCur').innerHTML = r.orderState ? tag(r.orderState) + (r.ordered ? ' <span style="font-size:11px;color:#c0392b">西原屋さんへ注文済み</span>' : '') : 'なし';
+    }).catch(function(e) { $('fxCur').textContent = '—'; toast(e.message, true); });
+  }
+  $('fxDo').onclick = function() {
+    var fix = { workerCode: $('fxWho').value, date: $('fxDate').value, orderState: $('fxTo').value, reason: $('fxWhy').value.trim() };
+    if (!fix.workerCode || !fix.date) { $('fxMsg').innerHTML = '<div class="msg-err">名前と日付を選んでください。</div>'; return; }
+    if (!fix.reason) { $('fxMsg').innerHTML = '<div class="msg-err">理由を入れてください（履歴に残ります）。</div>'; return; }
+    busy(true);
+    call('api_admin_fixReservation', fix).then(function(res) {
+      setData(res.data);
+      $('fxWhy').value = '';
+      showFixCurrent();
+      setTimeout(function() {
+        $('fxMsg').innerHTML = '<div class="msg-ok">直しました。集計とメールにも反映されます。</div>' +
+          (res.ordered ? '<div class="msg-warn">⚠ ' + esc(res.fromLabel) + 'はすでに西原屋さんへ注文済みです。お店へ電話で変更をお伝えください。</div>' : '');
+      }, 50);
+    }).catch(function(e) { $('fxMsg').innerHTML = '<div class="msg-err">' + esc(e.message) + '</div>'; }).then(function() { busy(false); });
+  };
+
+  load();
+})();
+</script>

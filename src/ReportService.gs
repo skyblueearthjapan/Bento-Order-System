@@ -133,6 +133,29 @@ var ReportService = (function() {
 
   var GROUP_ORDER = ['新工場', '本社工場'];
 
+  // ===== メニューごとの記号・色 =====
+  // ※ ファイルの読み込み順に依存しないよう、MENU_DEFS は使うときに読む
+  function _symMap() {
+    var m = {};
+    MENU_DEFS.forEach(function(d) { m[d.key] = d.sym; });
+    return m;
+  }
+  var CELL_BG = { men: '#e4ebf8', don: '#f8e0e0', toku: '#ffe9a8' };
+
+  function _symOf(state) { return _symMap()[state] || ''; }
+
+  /**
+   * この月度の Excel に載せるメニュー
+   * 弁当・おかずのみは常に。麺・丼・特弁は、予約があるか受付日がある月度だけ
+   */
+  function _menusForRange(dates, reservations, ctx) {
+    return MENU_DEFS.filter(function(m) {
+      if (m.kind === 'always') return true;
+      if (reservations.some(function(r) { return r.orderState === m.key; })) return true;
+      return dates.some(function(d) { return MenuService.isOffered(m.key, d, ctx); });
+    });
+  }
+
   /**
    * 指定月度の管理シート群を更新
    * 月度ごとに独立したスプレッドシートを使用するため、シート名は拠点名のみでOK
@@ -148,6 +171,7 @@ var ReportService = (function() {
     var reservations = SheetService.getReservationsInRange(range.from, range.to);
     var reservationsMap = _buildReservationsMap(reservations);
     var dates = _listDates(range.from, range.to);
+    var menus = _menusForRange(dates, reservations, MenuService.loadContext());
 
     GROUP_ORDER.forEach(function(group) {
       var sheetName = group;
@@ -172,85 +196,78 @@ var ReportService = (function() {
         return _getGroupKey(w.location) === group;
       });
 
-      groupWorkers.forEach(function(w) {
-        var row = [w.name, w.dept];
-        dates.forEach(function(d) {
+      function cellsFor(w) {
+        var hasAny = false;
+        var cells = dates.map(function(d) {
           var loc = resolveLocationForDate(w.code, d, reservationsMap, workersMap);
-          var g = _getGroupKey(loc);
-          // この日、このワーカーがこのグループに属するか
-          if (g !== group) {
-            row.push('');
-            return;
-          }
+          if (_getGroupKey(loc) !== group) return '';
           var rez = reservationsMap[w.code + '_' + d];
-          if (!rez) { row.push(''); return; }
-          if (rez.orderState === ORDER_STATE.BENTO) row.push('○');
-          else if (rez.orderState === ORDER_STATE.OKAZU) row.push('お');
-          else row.push('');
+          var sym = rez ? _symOf(rez.orderState) : '';
+          if (sym) hasAny = true;
+          return sym;
         });
-        rows.push(row);
+        return { cells: cells, hasAny: hasAny };
+      }
+
+      groupWorkers.forEach(function(w) {
+        rows.push([w.name, w.dept].concat(cellsFor(w).cells));
       });
 
       // 日別拠点変更で他グループから来た人も追加
       workers.forEach(function(w) {
         if (groupWorkers.indexOf(w) >= 0) return;  // 既に処理済み
-        // この作業員がこの月度のいずれかの日でこのグループに属していればリストに追加
-        var hasAny = false;
-        var row = [w.name + '※', w.dept];  // 一時配属を示す印
-        dates.forEach(function(d) {
-          var loc = resolveLocationForDate(w.code, d, reservationsMap, workersMap);
-          var g = _getGroupKey(loc);
-          if (g !== group) { row.push(''); return; }
-          var rez = reservationsMap[w.code + '_' + d];
-          if (!rez) { row.push(''); return; }
-          if (rez.orderState === ORDER_STATE.BENTO) { row.push('○'); hasAny = true; }
-          else if (rez.orderState === ORDER_STATE.OKAZU) { row.push('お'); hasAny = true; }
-          else row.push('');
-        });
-        if (hasAny) rows.push(row);
+        var c = cellsFor(w);
+        if (c.hasAny) rows.push([w.name + '※', w.dept].concat(c.cells));  // ※ = 一時配属
       });
 
       // 空行スキップ: データのない行は除外してから1回だけ書き込み
-      // rowsは[氏名, 部署, d0, d1, ...]なので、データ判定はインデックス2以降
       var displayRows = rows.filter(function(r) {
         for (var c = 2; c < r.length; c++) { if (r[c]) return true; }
         return false;
       });
       if (displayRows.length > 0) {
         sheet.getRange(2, 1, displayRows.length, header.length).setValues(displayRows);
+        // 麺・丼・特弁のセルに色を付けて見分けやすくする
+        var SYM = _symMap();
+        var bgs = displayRows.map(function(r) {
+          return r.map(function(v, i) {
+            if (i < 2) return null;
+            if (v === SYM.men) return CELL_BG.men;
+            if (v === SYM.don) return CELL_BG.don;
+            if (v === SYM.toku) return CELL_BG.toku;
+            return null;
+          });
+        });
+        sheet.getRange(2, 1, displayRows.length, header.length).setBackgrounds(bgs);
       }
 
-      // 集計行: 弁当 / おかずのみ / 合計
+      // 集計行: メニューごと + 合計
       var summaryStartRow = 2 + displayRows.length + 1;
-      var summaryRows = [
-        ['弁当', ''].concat(dates.map(function(d, i) {
-          var col = i + 2;  // rowsは[氏名, 部署, d0, d1, ...]なのでd_iはr[i+2]
-          var count = 0;
-          displayRows.forEach(function(r) { if (r[col] === '○') count++; });
-          return count;
-        })),
-        ['おかずのみ', ''].concat(dates.map(function(d, i) {
+      var allSyms = menus.map(function(m) { return m.sym; });
+      var summaryRows = menus.map(function(m) {
+        return [m.label, ''].concat(dates.map(function(d, i) {
           var col = i + 2;
           var count = 0;
-          displayRows.forEach(function(r) { if (r[col] === 'お') count++; });
+          displayRows.forEach(function(r) { if (r[col] === m.sym) count++; });
           return count;
-        })),
-        ['合計', ''].concat(dates.map(function(d, i) {
-          var col = i + 2;
-          var count = 0;
-          displayRows.forEach(function(r) { if (r[col] === '○' || r[col] === 'お') count++; });
-          return count;
-        }))
-      ];
-      sheet.getRange(summaryStartRow, 1, 3, header.length).setValues(summaryRows);
-      sheet.getRange(summaryStartRow, 1, 3, 1).setFontWeight('bold');
-      sheet.getRange(summaryStartRow, 1, 3, header.length).setBackground('#fff8ea');
+        }));
+      });
+      summaryRows.push(['合計', ''].concat(dates.map(function(d, i) {
+        var col = i + 2;
+        var count = 0;
+        displayRows.forEach(function(r) { if (allSyms.indexOf(r[col]) !== -1) count++; });
+        return count;
+      })));
+      sheet.getRange(summaryStartRow, 1, summaryRows.length, header.length).setValues(summaryRows);
+      sheet.getRange(summaryStartRow, 1, summaryRows.length, 1).setFontWeight('bold');
+      sheet.getRange(summaryStartRow, 1, summaryRows.length, header.length).setBackground('#fff8ea');
+      sheet.getRange(summaryStartRow + summaryRows.length - 1, 1, 1, header.length).setBackground('#fff2e0');
 
       // 列幅調整
       sheet.autoResizeColumns(1, 1);
     });
 
-    // ===== 全グループ合計シート =====
+    // ===== 全拠点合計シート（拠点 × メニューごとの日別個数） =====
     var totalSheetName = '全拠点合計';
     var totalSheet = ss.getSheetByName(totalSheetName);
     if (!totalSheet) {
@@ -258,59 +275,57 @@ var ReportService = (function() {
     } else {
       totalSheet.clear();
     }
-    var totalHeader = ['拠点グループ'].concat(dates).concat(['月度合計(弁当)', '月度合計(おかず)', '月度合計']);
+    var totalHeader = ['拠点', 'メニュー'].concat(dates).concat(['月度合計']);
     totalSheet.getRange(1, 1, 1, totalHeader.length).setValues([totalHeader]);
     totalSheet.getRange(1, 1, 1, totalHeader.length).setFontWeight('bold').setBackground('#f0e8d8');
     totalSheet.setFrozenRows(1);
-    totalSheet.setFrozenColumns(1);
+    totalSheet.setFrozenColumns(2);
 
-    // 日別・グループ別の集計を1日ずつ計算
-    var totalRows = [];
-    GROUP_ORDER.forEach(function(group) {
-      var monthB = 0, monthO = 0;
-      var dayCounts = dates.map(function(dateStr) {
-        var bento = 0, okazu = 0;
-        workers.forEach(function(w) {
-          var loc = resolveLocationForDate(w.code, dateStr, reservationsMap, workersMap);
-          var g = _getGroupKey(loc);
-          if (g !== group) return;
-          var rez = reservationsMap[w.code + '_' + dateStr];
-          if (!rez) return;
-          if (rez.orderState === ORDER_STATE.BENTO) bento++;
-          else if (rez.orderState === ORDER_STATE.OKAZU) okazu++;
-        });
-        monthB += bento;
-        monthO += okazu;
-        return bento + okazu;
-      });
-      totalRows.push([group].concat(dayCounts).concat([monthB, monthO, monthB + monthO]));
+    // counts[group][menu][dateIndex]
+    var counts = {};
+    GROUP_ORDER.forEach(function(g) {
+      counts[g] = {};
+      menus.forEach(function(m) { counts[g][m.key] = dates.map(function() { return 0; }); });
     });
-
-    // 総合計行
-    var grandRow = ['【全合計】'];
-    var grandB = 0, grandO = 0;
     dates.forEach(function(dateStr, i) {
-      var dayB = 0, dayO = 0;
       workers.forEach(function(w) {
-        var loc = resolveLocationForDate(w.code, dateStr, reservationsMap, workersMap);
-        var g = _getGroupKey(loc);
-        if (!g) return;
         var rez = reservationsMap[w.code + '_' + dateStr];
-        if (!rez) return;
-        if (rez.orderState === ORDER_STATE.BENTO) dayB++;
-        else if (rez.orderState === ORDER_STATE.OKAZU) dayO++;
+        if (!rez || !counts[GROUP_ORDER[0]][rez.orderState]) return;
+        var g = _getGroupKey(resolveLocationForDate(w.code, dateStr, reservationsMap, workersMap));
+        if (!g) return;
+        counts[g][rez.orderState][i]++;
       });
-      grandB += dayB;
-      grandO += dayO;
-      grandRow.push(dayB + dayO);
     });
-    grandRow.push(grandB);
-    grandRow.push(grandO);
-    grandRow.push(grandB + grandO);
-    totalRows.push(grandRow);
+
+    var totalRows = [];
+    var subtotalRows = [];  // 「計」行の位置（0始まり）
+    function pushGroup(label, getCount) {
+      menus.forEach(function(m, mi) {
+        var day = dates.map(function(d, i) { return getCount(m.key, i); });
+        var sum = day.reduce(function(a, b) { return a + b; }, 0);
+        totalRows.push([mi === 0 ? label : '', m.label].concat(day).concat([sum]));
+      });
+      var dayTotal = dates.map(function(d, i) {
+        return menus.reduce(function(a, m) { return a + getCount(m.key, i); }, 0);
+      });
+      totalRows.push(['', '計'].concat(dayTotal).concat([dayTotal.reduce(function(a, b) { return a + b; }, 0)]));
+      subtotalRows.push(totalRows.length - 1);
+    }
+    GROUP_ORDER.forEach(function(g) {
+      pushGroup(g, function(key, i) { return counts[g][key][i]; });
+    });
+    var grandStart = totalRows.length;
+    pushGroup('【全合計】', function(key, i) {
+      return GROUP_ORDER.reduce(function(a, g) { return a + counts[g][key][i]; }, 0);
+    });
 
     totalSheet.getRange(2, 1, totalRows.length, totalHeader.length).setValues(totalRows);
-    totalSheet.getRange(2 + totalRows.length - 1, 1, 1, totalHeader.length).setFontWeight('bold').setBackground('#fff2e0');
+    totalSheet.getRange(2, 1, totalRows.length, 1).setFontWeight('bold');
+    totalSheet.getRange(2 + grandStart, 1, totalRows.length - grandStart, totalHeader.length).setBackground('#fff2e0');
+    subtotalRows.forEach(function(r) {
+      totalSheet.getRange(2 + r, 1, 1, totalHeader.length).setFontWeight('bold').setBackground('#fff8ea');
+    });
+    totalSheet.autoResizeColumns(1, 2);
 
     // 最初の「シート1」があれば削除
     var defaultSheet = ss.getSheetByName('シート1');
@@ -327,8 +342,16 @@ var ReportService = (function() {
     updateAdminSheetsForMonth(monthKey);
   }
 
+  /** 空の集計（1拠点分） */
+  function emptyGroup() {
+    var g = { total: 0, names: [], namesBy: {} };
+    MENU_DEFS.forEach(function(m) { g[m.key] = 0; g.namesBy[m.key] = []; });
+    return g;
+  }
+
   /**
-   * 本日分のメール用集計データを生成
+   * 指定日のメール用集計データを生成
+   * byGroup[拠点] = { bento, okazu, men, don, toku, total, names:['氏名（弁当）',...], namesBy:{bento:[氏名],...} }
    */
   function generateReportSummary(dateStr) {
     if (!dateStr) dateStr = formatDateYmd(new Date());
@@ -336,35 +359,29 @@ var ReportService = (function() {
     var workersMap = {};
     workers.forEach(function(w) { workersMap[w.code] = w; });
     var reservations = SheetService.getReservationsInRange(dateStr, dateStr);
-    var reservationsMap = _buildReservationsMap(reservations);
 
     var byGroup = {};
-    GROUP_ORDER.forEach(function(g) {
-      byGroup[g] = { bento: 0, okazu: 0, total: 0, names: [] };
-    });
+    GROUP_ORDER.forEach(function(g) { byGroup[g] = emptyGroup(); });
 
     reservations.forEach(function(r) {
       if (!r.orderState) return;
+      var def = getMenuDef(r.orderState);
+      if (!def) return;
       var w = workersMap[r.workerCode];
       if (!w) return;
-      var loc = r.location || w.location;
-      var group = _getGroupKey(loc);
+      var group = _getGroupKey(r.location || w.location);
       if (!group) return;
-      if (r.orderState === ORDER_STATE.BENTO) {
-        byGroup[group].bento++;
-        byGroup[group].total++;
-        byGroup[group].names.push(w.name + '（弁当）');
-      } else if (r.orderState === ORDER_STATE.OKAZU) {
-        byGroup[group].okazu++;
-        byGroup[group].total++;
-        byGroup[group].names.push(w.name + '（おかずのみ）');
-      }
+      var b = byGroup[group];
+      b[def.key]++;
+      b.total++;
+      b.names.push(w.name + '（' + def.label + '）');
+      b.namesBy[def.key].push(w.name);
     });
 
-    var grand = { bento: 0, okazu: 0, total: 0 };
+    var grand = { total: 0 };
+    MENU_DEFS.forEach(function(m) { grand[m.key] = 0; });
     GROUP_ORDER.forEach(function(g) {
-      grand.bento += byGroup[g].bento;
-      grand.okazu += byGroup[g].okazu;
+      MENU_DEFS.forEach(function(m) { grand[m.key] += byGroup[g][m.key]; });
       grand.total += byGroup[g].total;
     });
 
@@ -378,6 +395,7 @@ var ReportService = (function() {
     updateAdminSheetsForMonth: updateAdminSheetsForMonth,
     updateAdminSheetsForToday: updateAdminSheetsForToday,
     generateReportSummary: generateReportSummary,
+    emptyGroup: emptyGroup,
     GROUP_ORDER: GROUP_ORDER
   };
 })();

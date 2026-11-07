@@ -26,6 +26,25 @@ var SHEET_EMAIL_RECIPIENTS = 'mail_recipients'; // メール送信先管理
 var SHEET_NOTICES = 'notices';                 // お知らせ管理（表示内容・期限）
 var SHEET_OPERATION_LOG = 'operation_log';     // 操作ログ
 var SHEET_CONFIG = 'app_config';               // アプリ設定
+var SHEET_MENU_PERIODS = 'menu_periods';       // 麺・丼の受付期間（総務設定画面から編集）
+var SHEET_TOKUBEN = 'tokuben';                 // 特弁（1日限定）の設定（総務設定画面から編集）
+var SHEET_ADMIN_USERS = 'admin_users';         // 総務設定を開ける人
+var SHEET_ADMIN_LOG = 'admin_log';             // 総務設定の変更履歴
+
+var MENU_PERIOD_HEADERS = ['ID', 'メニュー', '期間の名前', '開始日', '終了日', '有効フラグ', 'チラシファイルID', 'チラシファイル名', '更新日時', '更新者'];
+var TOKUBEN_HEADERS = ['ID', '日付', '名前', '価格', '有効フラグ', 'チラシファイルID', 'チラシファイル名', '更新日時', '更新者'];
+var ADMIN_USER_HEADERS = ['メールアドレス', '名前', '有効フラグ'];
+var ADMIN_LOG_HEADERS = ['日時', 'ユーザー', '内容'];
+
+// 「設定できる人」シートを新しく作るときの初期登録
+var INITIAL_ADMIN_USERS = [
+  ['imaizumi@lineworks-local.info', '今泉', 'ON'],
+  ['admin-01@lineworks-local.info', '管理者', 'ON']
+];
+
+// チラシPDFの保存先（ADMIN_OUTPUT_FOLDER_ID の中に自動で作るフォルダ名）
+var FLYER_FOLDER_NAME = 'お弁当チラシ';
+var FLYER_MAX_BYTES = 10 * 1024 * 1024;   // 1ファイル10MBまで（画面から送れる大きさに余裕を持たせる）
 
 // ===== 予約データシート 列構成 =====
 var RESERVATION_COL = {
@@ -72,8 +91,31 @@ var CALENDAR_TYPE = {
 var ORDER_STATE = {
   NONE: '',
   BENTO: 'bento',      // 通常弁当 ○
-  OKAZU: 'okazu'       // おかずのみ お
+  OKAZU: 'okazu',      // おかずのみ お
+  MEN: 'men',          // 麺（受付期間のみ） 麺
+  DON: 'don',          // 丼（受付期間のみ） 丼
+  TOKU: 'toku'         // 特弁（1日限定） 特
 };
+
+// ===== メニュー定義（表示名・Excel記号・価格・受付の種類） =====
+// kind: 'always' = いつでも / 'period' = 総務が決めた受付期間のみ / 'day' = 特弁の日のみ
+// 麺・丼・特弁（always 以外）の締切は「前の平日の朝8:00」
+var MENU_DEFS = [
+  { key: 'bento', label: '弁当',       sym: '○',  price: 450, kind: 'always' },
+  { key: 'okazu', label: 'おかずのみ', sym: 'お', price: 350, kind: 'always' },
+  { key: 'men',   label: '麺',         sym: '麺', price: 450, kind: 'period' },
+  { key: 'don',   label: '丼',         sym: '丼', price: 450, kind: 'period' },
+  { key: 'toku',  label: '特弁',       sym: '特', price: 0,   kind: 'day' }
+];
+var MENU_KEYS = MENU_DEFS.map(function(m) { return m.key; });
+var EARLY_MENU_KEYS = ['men', 'don', 'toku'];
+
+function getMenuDef(key) {
+  for (var i = 0; i < MENU_DEFS.length; i++) {
+    if (MENU_DEFS[i].key === key) return MENU_DEFS[i];
+  }
+  return null;
+}
 
 // ===== 拠点 =====
 var LOCATION = {
@@ -93,6 +135,7 @@ var RULES = {
   DEADLINE_MINUTE: 0,
   SATURDAY_DEADLINE_HOUR: 15,    // 出勤土曜の締切（前日金曜）15:00
   SATURDAY_DEADLINE_MINUTE: 0,
+  EARLY_DEADLINE_HOUR: 8,        // 麺・丼・特弁の締切: 前の平日の8:00
   RESERVATION_WINDOW_DAYS: 14,   // 予約可能期間: 本日から2週間
   MONTH_START_DAY: 16            // 月度開始日: 16日
 };
@@ -105,7 +148,7 @@ var APP_TITLE = 'お弁当予約';
 
 // ===== お知らせ初期値 =====
 var DEFAULT_NOTICE = '【価格改定のお知らせ】2025/10/16注文分より、お弁当の価格が変わりました\n（従来：¥400 → 新価格：¥450 ※麺・丼も同価格）';
-var DEFAULT_WARNING = '※ 丼・麺類・幕ノ内等は、このアプリケーションからはご注文いただけません。\nご希望の場合は、前日の15時までに総務までご連絡ください。';
+var DEFAULT_WARNING = '※ 幕ノ内等は、このアプリケーションからはご注文いただけません。\nご希望の場合は、前日の15時までに総務までご連絡ください。';
 
 // ===== ヘルパー =====
 
