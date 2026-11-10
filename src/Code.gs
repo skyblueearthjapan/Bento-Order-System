@@ -20,7 +20,7 @@ function doGet(e) {
     at.appUrl = appUrl;
     at.currentUserEmail = currentUser;
     at.todayStr = formatDateYmd(new Date());
-    // 総務設定はほかのサイトに埋め込ませない（予約画面からは target="_top" で開く）
+    // 総務設定はほかのサイトに埋め込ませない（予約画面からは別タブで開く）
     return at.evaluate()
       .setTitle(APP_TITLE + ' 総務設定')
       .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.DEFAULT)

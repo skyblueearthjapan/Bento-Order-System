@@ -116,7 +116,7 @@
 
 <header class="admin-header">
   <div class="t">🍱 <?= appTitle ?> ─ 総務設定</div>
-  <div class="who">ログイン中: <?= currentUserEmail ?>　<a class="portal-btn" href="<?= appUrl ?>" target="_top">予約画面へ戻る</a></div>
+  <div class="who">ログイン中: <?= currentUserEmail ?>　<a class="portal-btn" href="<?= appUrl ?>" target="_blank" rel="noopener" onclick="backToApp()">予約画面へ戻る</a></div>
 </header>
 
 <div class="toast" id="toast"></div>
@@ -215,6 +215,13 @@
   var INIT_TODAY = <?!= JSON.stringify(todayStr) ?>;
 </script>
 <?!= include('icons') ?>
+<script>
+  // GAS の枠の中からは同じタブでページを切り替えられないため、予約画面は新しいタブで開き、
+  // 総務設定のタブは閉じられれば閉じる（ブラウザが許さないときはそのまま残る）
+  function backToApp() {
+    setTimeout(function() { try { window.top.close(); } catch (e) {} }, 300);
+  }
+</script>
 <?!= include('admin.js') ?>
 </body>
 </html>
