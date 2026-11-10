@@ -12,7 +12,7 @@
 <header class="header">
   <div class="header-title"><span class="emoji">🍱</span><?= appTitle ?></div>
   <div class="header-right">
-    <a href="#" target="_blank" rel="noopener" class="admin-btn" id="adminBtn" style="display:none">⚙ 総務設定</a>
+    <a href="#" class="admin-btn" id="adminBtn" style="display:none">⚙ 総務設定</a>
     <a href="<?= portalUrl ?>" target="_top" class="portal-btn">社内ポータルへ移動</a>
   </div>
 </header>
@@ -29,6 +29,18 @@
 
 <!-- ===== トースト通知 ===== -->
 <div class="toast" id="toast">保存しました</div>
+
+<!-- 総務設定（予約画面の上に重ねて表示。社内ポータルの中でも同じ画面で開く） -->
+<div class="admin-ov" id="adminOv">
+  <div class="admin-ov-bar">
+    <span class="admin-ov-title">⚙ 総務設定</span>
+    <button type="button" class="admin-ov-back" id="adminBack">予約画面へ戻る</button>
+  </div>
+  <div class="admin-ov-body">
+    <div class="admin-ov-loading">総務設定を読み込み中です…</div>
+    <iframe id="adminFrame" title="総務設定"></iframe>
+  </div>
+</div>
 
 <!-- ===== TOP画面 ===== -->
 <main class="top-container">

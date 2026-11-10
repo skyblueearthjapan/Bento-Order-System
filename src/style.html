@@ -332,6 +332,16 @@
   .legend-icon.img { background: #fff; border: 1px solid #e8dcc0; }
 
   /* ===== チラシ表示 ===== */
+  /* ===== 総務設定（予約画面の上に重ねる枠） ===== */
+  .admin-ov { display: none; position: fixed; inset: 0; z-index: 2200; background: #fdfaf4; flex-direction: column; }
+  .admin-ov.active { display: flex; }
+  .admin-ov-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 16px; background: linear-gradient(135deg, #5b4a2e 0%, #6e5a36 100%); color: #fff; }
+  .admin-ov-title { font-size: 13px; font-weight: 700; letter-spacing: 1px; }
+  .admin-ov-back { font-family: inherit; font-size: 13px; font-weight: 700; padding: 6px 16px; border: none; border-radius: 8px; background: #1f9d55; color: #fff; cursor: pointer; }
+  .admin-ov-back:hover { background: #177a43; }
+  .admin-ov-body { position: relative; flex: 1; min-height: 0; }
+  .admin-ov-loading { position: absolute; inset: 0; display: flex; justify-content: center; align-items: center; font-size: 13px; color: #6e5a36; }
+  .admin-ov-body iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: transparent; }
   .fly-ov { display: none; position: fixed; inset: 0; background: rgba(20,15,10,0.75); z-index: 2500; justify-content: center; align-items: center; padding: 12px; }
   .fly-ov.active { display: flex; }
   .fly-box { background: #525659; border-radius: 10px; width: 100%; max-width: 820px; height: 92vh; display: flex; flex-direction: column; overflow: hidden; }

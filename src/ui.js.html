@@ -313,10 +313,40 @@
     if (state.isAdmin && state.adminUrl) {
       b.href = state.adminUrl;
       b.style.display = '';
+      b.onclick = function(e) { e.preventDefault(); openAdmin(); };
     } else {
       b.style.display = 'none';
     }
   }
+
+  // 総務設定は予約画面の上に重ねた枠の中で開く。
+  // Google の枠の中からは同じタブでページを切り替えられないため（社内ポータルの中でも同じ画面で開ける）
+  function openAdmin() {
+    var ov = document.getElementById('adminOv');
+    var fr = document.getElementById('adminFrame');
+    if (!ov || !fr || !state.adminUrl) return;
+    fr.src = state.adminUrl + (state.adminUrl.indexOf('?') >= 0 ? '&' : '?') + 'embed=1';
+    ov.classList.add('active');
+  }
+
+  // 戻ったら、総務が変えた受付期間・特弁を予約画面に反映する
+  function closeAdmin() {
+    var ov = document.getElementById('adminOv');
+    var fr = document.getElementById('adminFrame');
+    if (ov) ov.classList.remove('active');
+    if (fr) fr.src = 'about:blank';
+    GasPromise.call('api_bootstrap').then(function(data) {
+      state.menus = data.menus || state.menus;
+      state.periods = data.menuPeriods || [];
+      state.tokus = data.tokus || [];
+      renderExtras();
+      if (state.currentUser) renderCalendar();
+    }).catch(function(err) { console.error('refresh after admin failed:', err); });
+  }
+  (function() {
+    var back = document.getElementById('adminBack');
+    if (back) back.onclick = closeAdmin;
+  })();
 
   // ===== お知らせ描画 =====
   function renderNotice(notice, warning) {

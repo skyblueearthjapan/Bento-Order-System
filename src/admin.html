@@ -116,7 +116,7 @@
 
 <header class="admin-header">
   <div class="t">🍱 <?= appTitle ?> ─ 総務設定</div>
-  <div class="who">ログイン中: <?= currentUserEmail ?>　<a class="portal-btn" href="<?= appUrl ?>" target="_blank" rel="noopener" onclick="backToApp()">予約画面へ戻る</a></div>
+  <div class="who">ログイン中: <?= currentUserEmail ?>　<? if (!embedded) { ?><a class="portal-btn" href="<?= appUrl ?>" target="_blank" rel="noopener" onclick="backToApp()">予約画面へ戻る</a><? } ?></div>
 </header>
 
 <div class="toast" id="toast"></div>

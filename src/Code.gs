@@ -20,10 +20,12 @@ function doGet(e) {
     at.appUrl = appUrl;
     at.currentUserEmail = currentUser;
     at.todayStr = formatDateYmd(new Date());
-    // 総務設定はほかのサイトに埋め込ませない（予約画面からは別タブで開く）
+    // 予約画面の中の枠（iframe）に表示する。そのときは「予約画面へ戻る」を予約画面の側に出す
+    at.embedded = (e && e.parameter && e.parameter.embed === '1');
+    // 埋め込みを許す（社内ポータルの中でも同じ画面で開くため）。開けるのは admin_users シートに登録した人だけ
     return at.evaluate()
       .setTitle(APP_TITLE + ' 総務設定')
-      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.DEFAULT)
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
       .addMetaTag('viewport', 'width=device-width, initial-scale=1');
   }
 

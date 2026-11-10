@@ -19,7 +19,7 @@
       <li>使う必要がある場合は、システム管理者へご連絡ください。</li>
     </ul>
   </div>
-  <a class="portal-btn" href="<?= appUrl ?>" target="_blank" rel="noopener" onclick="backToApp()">予約画面へ戻る</a>
+  <? if (!embedded) { ?><a class="portal-btn" href="<?= appUrl ?>" target="_blank" rel="noopener" onclick="backToApp()">予約画面へ戻る</a><? } ?>
 </main>
 <script>
   // GAS の枠の中からは同じタブでページを切り替えられないため、予約画面は新しいタブで開き、
